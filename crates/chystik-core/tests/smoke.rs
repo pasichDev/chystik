@@ -1,7 +1,12 @@
-//! Real-machine smoke tests (Task 6 of docs/plans/2026-08-24-chystik-core.md).
+//! Real-machine smoke tests.
 //!
 //! These touch the real `$HOME` and the real Trash, so they are `#[ignore]`d
-//! by default. Run them explicitly once per machine:
+//! by default — they assert against one particular machine and cannot run in
+//! CI. The deletion FLOW itself is covered unconditionally in
+//! `tests/deletion.rs`, which substitutes the trash; what remains here is
+//! only the part that needs a real desktop.
+//!
+//! Run them explicitly once per machine:
 //!
 //! ```sh
 //! source ~/.cargo/env
@@ -17,7 +22,6 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
 
-use chystik_core::guard;
 use chystik_core::model::{Category, Finding, Severity};
 use chystik_core::scanner;
 
@@ -130,8 +134,9 @@ fn real_home_scan_finds_known_items_and_exports_json() {
     println!("JSON export OK: {}", report_path.display());
 }
 
-/// Delete flow sanity on throwaway data: guard passes, trash removes,
-/// summary accounting matches.
+/// The one thing `tests/deletion.rs` cannot cover: that the real XDG trash
+/// accepts what the flow hands it. Everything around it — guard checks,
+/// identity re-check, tallying — is tested there against a fake.
 #[test]
 #[ignore = "moves files to the real Trash; run manually with --ignored"]
 fn delete_flow_moves_demo_project_to_trash() {
@@ -150,9 +155,16 @@ fn delete_flow_moves_demo_project_to_trash() {
     let finding = find(&findings, "node_modules").expect("demo node_modules found");
     assert_eq!(finding.category, Category::BuildArtifacts);
 
-    // Guard first (as the GUI does), then trash-delete.
-    guard::check(&finding.path, base.path()).expect("guard accepts demo project");
-    trash::delete(&finding.path).expect("trash delete succeeds");
+    // The production flow end to end, against the real trash.
+    let outcome = chystik_core::cleaner::clean(
+        &[chystik_core::cleaner::CleanupItem {
+            path: finding.path.clone(),
+            size_bytes: finding.size_bytes,
+            scan_root: Some(base.path().to_path_buf()),
+        }],
+        &chystik_core::cleaner::SystemTrash,
+    );
+    assert_eq!(outcome.removed_count(), 1, "{:?}", outcome.skipped);
     assert!(
         !finding.path.exists(),
         "deleted item must leave the filesystem"

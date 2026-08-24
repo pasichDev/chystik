@@ -697,7 +697,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "trash",
 ]
 
 [[package]]

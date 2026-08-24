@@ -10,6 +10,7 @@ use chystik_core::model::Severity;
 use crate::app::{ChystikApp, Notice};
 use crate::format::*;
 use crate::i18n::{self, Lang};
+use crate::state::Section;
 use crate::theme::*;
 use crate::widgets::*;
 
@@ -20,6 +21,248 @@ impl ChystikApp {
     /// plus Continue — no Escape, no click-away. A tool that deletes should
     /// make the user say once, in their own click, that they understand what
     /// that means.
+    /// Section picker, opened with Ctrl+K.
+    ///
+    /// The modeless direction: no permanent tab strip, so the content area
+    /// keeps every pixel. The cost is discoverability, which the chip in
+    /// the command bar and the digit shortcuts are there to offset.
+    /// Confirmation before erasing privacy traces.
+    ///
+    /// Always shown, with no "do not ask again": the cleanup path has a
+    /// manifest in front of it, this one does not, and the thing being
+    /// erased is a record of what someone did rather than space they can
+    /// get back by rebuilding something.
+    pub(crate) fn show_privacy_confirm(&mut self, ctx: &egui::Context) {
+        let s = self.s();
+        let selected: Vec<&chystik_core::privacy::PrivacyItem> = self
+            .traces_selected
+            .iter()
+            .filter_map(|i| self.traces.get(*i))
+            .collect();
+        let total: u64 = selected.iter().map(|t| t.size_bytes).sum();
+        let irreversible = selected
+            .iter()
+            .filter(|t| t.severity == Severity::Risky)
+            .count();
+
+        let mut confirmed = false;
+        let mut cancelled = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+
+        dim_backdrop(ctx, "privacy_confirm_backdrop");
+        egui::Window::new("privacy_confirm")
+            .title_bar(false)
+            .id(egui::Id::new("privacy_confirm_window"))
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .order(egui::Order::Tooltip)
+            .resizable(false)
+            .collapsible(false)
+            .frame(
+                egui::Frame::window(&ctx.style())
+                    .fill(COL_RAISED)
+                    .inner_margin(egui::Margin::same(space(6.0))),
+            )
+            .show(ctx, |ui| {
+                ui.set_width(540.0);
+                ui.label(txt(s.privacy_confirm_title.as_str(), "title", COL_TEXT));
+                ui.add_space(space(1.5));
+                ui.label(txt(s.privacy_confirm_lead.as_str(), "caption", COL_TEXT2));
+
+                if irreversible > 0 {
+                    ui.add_space(space(3.0));
+                    egui::Frame::default()
+                        .fill(COL_SURFACE)
+                        .stroke(egui::Stroke::new(1.0_f32, severity_color(Severity::Risky)))
+                        .rounding(egui::Rounding::same(R_MD))
+                        .inner_margin(egui::Margin::same(space(3.0)))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                paint_severity_glyph(
+                                    ui,
+                                    Severity::Risky,
+                                    10.0,
+                                    severity_color(Severity::Risky),
+                                );
+                                ui.add_space(space(1.5));
+                                ui.label(txt(
+                                    i18n::fill(
+                                        s.privacy_confirm_risky.as_str(),
+                                        &[("n", &irreversible.to_string())],
+                                    ),
+                                    "strong",
+                                    severity_color(Severity::Risky),
+                                ));
+                            });
+                        });
+                }
+
+                ui.add_space(space(4.0));
+                egui::ScrollArea::vertical()
+                    .id_salt("privacy_confirm_list")
+                    .max_height(240.0)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        for trace in &selected {
+                            ui.horizontal_top(|ui| {
+                                let (rule, _) = ui.allocate_exact_size(
+                                    egui::vec2(3.0, space(8.0)),
+                                    egui::Sense::hover(),
+                                );
+                                ui.painter().rect_filled(
+                                    rule,
+                                    egui::Rounding::same(1.5),
+                                    severity_color(trace.severity),
+                                );
+                                ui.add_space(space(2.0));
+                                ui.vertical(|ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.label(txt(trace.kind.label(), "strong", COL_TEXT));
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                ui.label(txt(
+                                                    format_size(trace.size_bytes),
+                                                    "mono_sm",
+                                                    COL_TEXT2,
+                                                ));
+                                            },
+                                        );
+                                    });
+                                    // The cost, not the path: at the moment
+                                    // of confirming, what matters is what
+                                    // stops working.
+                                    ui.label(txt(trace.cost, "micro", COL_TEXT3));
+                                });
+                            });
+                            ui.add_space(space(2.0));
+                        }
+                    });
+
+                ui.add_space(space(3.0));
+                ui.label(txt(s.privacy_confirm_trash.as_str(), "micro", COL_TEXT3));
+                ui.add_space(space(4.0));
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if primary_button(
+                        ui,
+                        &i18n::fill(
+                            s.privacy_confirm_erase.as_str(),
+                            &[
+                                ("n", &selected.len().to_string()),
+                                ("size", &format_size(total)),
+                            ],
+                        ),
+                        severity_color(Severity::Risky),
+                        !selected.is_empty(),
+                    )
+                    .clicked()
+                    {
+                        confirmed = true;
+                    }
+                    if ghost_button(ui, s.cancel.as_str(), true).clicked() {
+                        cancelled = true;
+                    }
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.label(txt(s.esc_to_cancel.as_str(), "micro", COL_TEXT3));
+                    });
+                });
+            });
+
+        if cancelled {
+            self.privacy_confirm_open = false;
+        } else if confirmed {
+            self.privacy_confirm_open = false;
+            self.clear_selected_traces();
+        }
+    }
+
+    pub(crate) fn show_palette(&mut self, ctx: &egui::Context) {
+        let s = self.s();
+        let current = self.section;
+        let mut chosen: Option<Section> = None;
+
+        dim_backdrop(ctx, "palette_backdrop");
+        egui::Window::new("palette")
+            .title_bar(false)
+            .id(egui::Id::new("palette_window"))
+            .anchor(egui::Align2::CENTER_TOP, [0.0, 120.0])
+            .order(egui::Order::Tooltip)
+            .resizable(false)
+            .collapsible(false)
+            .frame(
+                egui::Frame::window(&ctx.style())
+                    .fill(COL_RAISED)
+                    .inner_margin(egui::Margin::same(space(1.5))),
+            )
+            .show(ctx, |ui| {
+                ui.set_width(380.0);
+                egui::Frame::none()
+                    .inner_margin(egui::Margin::symmetric(space(3.0), space(2.5)))
+                    .show(ui, |ui| {
+                        ui.label(txt(s.palette_title.as_str(), "caption", COL_TEXT3));
+                    });
+                ui.painter().hline(
+                    ui.max_rect().x_range(),
+                    ui.cursor().top(),
+                    egui::Stroke::new(1.0_f32, COL_LINE),
+                );
+                ui.add_space(space(1.5));
+
+                for section in Section::ALL {
+                    let active = section == current;
+                    let (rect, response) = ui.allocate_exact_size(
+                        egui::vec2(ui.available_width(), space(9.5)),
+                        egui::Sense::click(),
+                    );
+                    let inner = rect.shrink2(egui::vec2(space(1.5), 1.0));
+                    // The window itself is COL_RAISED, so hovering used to
+                    // paint the row in exactly the background colour and
+                    // nothing happened on screen.
+                    if active || response.hovered() {
+                        ui.painter().rect_filled(
+                            inner,
+                            egui::Rounding::same(R_MD),
+                            if active { COL_ACCENT_SOFT } else { COL_LINE },
+                        );
+                    }
+                    if response.hovered() && !active {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+                    let style = |name: &str| {
+                        ui.style()
+                            .text_styles
+                            .get(&ts(name))
+                            .cloned()
+                            .unwrap_or_default()
+                    };
+                    ui.painter().text(
+                        egui::pos2(inner.left() + space(3.0), inner.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        section.label(s),
+                        style(if active { "strong" } else { "body" }),
+                        if active { COL_TEXT } else { COL_TEXT2 },
+                    );
+                    ui.painter().text(
+                        egui::pos2(inner.right() - space(3.0), inner.center().y),
+                        egui::Align2::RIGHT_CENTER,
+                        (section.index() + 1).to_string(),
+                        style("mono_sm"),
+                        COL_TEXT3,
+                    );
+                    if response.clicked() {
+                        chosen = Some(section);
+                    }
+                }
+                ui.add_space(space(1.5));
+            });
+
+        if let Some(section) = chosen {
+            self.go_to(section);
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.palette_open = false;
+        }
+    }
+
     pub(crate) fn show_consent_modal(&mut self, ctx: &egui::Context) {
         let s = self.s();
         let mut accepted = false;
@@ -304,6 +547,7 @@ impl ChystikApp {
         let mut open_repo = false;
         let mut next_lang: Option<Lang> = None;
         let mut add_exclusion = false;
+        let mut export = false;
         if self.app_mark.is_none() {
             self.app_mark = app_mark(ctx);
         }
@@ -430,9 +674,19 @@ impl ChystikApp {
                         });
                 }
                 ui.add_space(space(2.0));
-                if ghost_button(ui, s.exclusions_add.as_str(), true).clicked() {
-                    add_exclusion = true;
-                }
+                ui.horizontal(|ui| {
+                    if ghost_button(ui, s.exclusions_add.as_str(), true).clicked() {
+                        add_exclusion = true;
+                    }
+                    // Moved off the command bar: exporting is occasional,
+                    // and the bar should carry the one action that matters.
+                    if ghost_button(ui, s.export.as_str(), !self.findings.is_empty())
+                        .on_hover_text(s.export_hint.as_str())
+                        .clicked()
+                    {
+                        export = true;
+                    }
+                });
 
                 ui.add_space(space(5.0));
                 ui.painter().hline(
@@ -487,6 +741,10 @@ impl ChystikApp {
             if let Some(dir) = rfd::FileDialog::new().pick_folder() {
                 self.exclude_path(dir);
             }
+        }
+        if export {
+            self.settings_open = false;
+            self.export_json();
         }
         if open_repo {
             // eframe only forwards `open_url` when built with a browser

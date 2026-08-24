@@ -13,7 +13,7 @@ thiserror = { workspace = true }
 jwalk = { workspace = true }
 chrono = { workspace = true }
 libc = { workspace = true }
+trash = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-trash = { workspace = true }

@@ -31,6 +31,20 @@ pub const CONFIG_CACHE_ALLOWLIST: &[&str] = &[
     ".config/google-chrome/optimization_guide_model_store",
 ];
 
+/// Privacy traces under `.config` a privacy clean may target.
+///
+/// Separate from the cache allowlist on purpose: these are NOT caches, and
+/// nothing here regenerates. They are listed because clearing browsing
+/// history is the explicit point of the privacy view, and a guard that
+/// refuses it silently would leave the feature broken rather than safe.
+/// Each entry is a single file whose only content is a record of activity.
+pub const PRIVACY_ALLOWLIST: &[&str] = &[
+    ".config/google-chrome/Default/History",
+    ".config/google-chrome/Default/Cookies",
+    ".config/chromium/Default/History",
+    ".config/chromium/Default/Cookies",
+];
+
 /// True when `candidate` is one of the allowlisted `.config` caches (or
 /// lives inside one).
 fn is_allowlisted_config_cache(candidate: &Path) -> bool {
@@ -43,6 +57,7 @@ fn is_allowlisted_config_cache(candidate: &Path) -> bool {
     let rel = rel.to_string_lossy().replace('\\', "/");
     CONFIG_CACHE_ALLOWLIST
         .iter()
+        .chain(PRIVACY_ALLOWLIST.iter())
         .any(|allowed| rel == *allowed || rel.starts_with(&format!("{allowed}/")))
 }
 
@@ -291,6 +306,31 @@ mod tests {
         let git = home.path().join(".config/Code/CachedData/.git");
         std::fs::create_dir_all(&git).unwrap();
         assert!(check(&git, home.path()).is_err());
+        std::env::remove_var("CHYSTIK_TEST_HOME");
+    }
+
+    /// Privacy traces under `.config` must be deletable, or the privacy
+    /// view would list items the guard silently refuses.
+    #[test]
+    fn allowlisted_privacy_traces_are_deletable() {
+        let _env = crate::rules::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let home = tempdir().unwrap();
+        std::env::set_var("CHYSTIK_TEST_HOME", home.path());
+
+        for rel in PRIVACY_ALLOWLIST {
+            let path = home.path().join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, "activity record").unwrap();
+            assert!(
+                check(&path, home.path()).is_ok(),
+                "{rel} is listed as clearable but the guard refuses it"
+            );
+        }
+        // The exception is exactly these files, not their directory.
+        let profile = home.path().join(".config/google-chrome/Default");
+        assert!(check(&profile, home.path()).is_err());
         std::env::remove_var("CHYSTIK_TEST_HOME");
     }
 

@@ -45,16 +45,80 @@ pub fn export_json(findings: &[Finding], path: &Path) -> Result<(), std::io::Err
         summaries: summarize(findings),
         findings,
     };
-    let file = std::fs::File::create(path)?;
-    let mut writer = std::io::BufWriter::new(file);
-    serde_json::to_writer_pretty(&mut writer, &report)?;
-    std::io::Write::flush(&mut writer)?;
-    Ok(())
+    // Written to a sibling temporary and renamed into place. `rename(2)`
+    // within one directory is atomic, so a crash or a full disk leaves the
+    // previous report intact rather than a half-written one.
+    let directory = path.parent().unwrap_or(Path::new("."));
+    let temporary = directory.join(format!(
+        ".{}.partial",
+        path.file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "chystik-report".to_owned())
+    ));
+
+    let write = (|| -> Result<(), std::io::Error> {
+        let file = std::fs::File::create(&temporary)?;
+        let mut writer = std::io::BufWriter::new(file);
+        serde_json::to_writer_pretty(&mut writer, &report)?;
+        std::io::Write::flush(&mut writer)?;
+        // Durable before the rename, or a crash can leave an empty file
+        // under the final name.
+        writer.get_ref().sync_all()
+    })();
+
+    if let Err(e) = write {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(e);
+    }
+    std::fs::rename(&temporary, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&temporary);
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A failed export must not replace a good report with a broken one.
+    #[test]
+    fn export_leaves_no_partial_file_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("report.json");
+
+        export_json(&[], &target).expect("first export");
+        let first = std::fs::read_to_string(&target).unwrap();
+        assert!(first.contains("generated_at"));
+
+        // Nothing but the report should exist: no leftover temporary.
+        let strays: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|name| name != "report.json")
+            .collect();
+        assert!(strays.is_empty(), "left behind {strays:?}");
+    }
+
+    /// Exporting over an existing report replaces it wholesale.
+    #[test]
+    fn export_replaces_an_existing_report_atomically() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("report.json");
+        std::fs::write(&target, "PREVIOUS CONTENT").unwrap();
+
+        export_json(&[], &target).expect("export");
+        let after = std::fs::read_to_string(&target).unwrap();
+        assert!(!after.contains("PREVIOUS"), "the old file survived");
+        assert!(after.contains("generated_at"));
+    }
+
+    /// An unwritable directory reports an error rather than truncating.
+    #[test]
+    fn export_into_a_missing_directory_fails_cleanly() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("no-such-dir/report.json");
+        assert!(export_json(&[], &target).is_err());
+    }
     use crate::model::{Category, Finding, Severity};
     use std::path::PathBuf;
 

@@ -338,3 +338,50 @@ mod tests {
         assert_eq!(longest_containing(&refs, Path::new("rel/path")), None);
     }
 }
+
+/// Which view the window is showing.
+///
+/// Navigation follows the "modeless" direction: no permanent tab strip, a
+/// compact chip in the command bar showing where you are, and a palette on
+/// Ctrl+K. The content area keeps every pixel.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub(crate) enum Section {
+    #[default]
+    Cleanup,
+    Disks,
+    Privacy,
+}
+
+impl Section {
+    pub(crate) const ALL: [Section; 3] = [Section::Cleanup, Section::Disks, Section::Privacy];
+
+    pub(crate) fn label(self, s: &crate::i18n::Strings) -> &str {
+        match self {
+            Section::Cleanup => &s.section_cleanup,
+            Section::Disks => &s.section_disks,
+            Section::Privacy => &s.section_privacy,
+        }
+    }
+
+    /// 1-based position, used for the digit shortcuts.
+    pub(crate) fn index(self) -> usize {
+        Section::ALL.iter().position(|x| *x == self).unwrap_or(0)
+    }
+}
+
+#[cfg(test)]
+mod section_tests {
+    use super::*;
+
+    #[test]
+    fn every_section_has_a_stable_index() {
+        for (i, section) in Section::ALL.iter().enumerate() {
+            assert_eq!(section.index(), i);
+        }
+    }
+
+    #[test]
+    fn cleanup_is_where_the_app_opens() {
+        assert_eq!(Section::default(), Section::Cleanup);
+    }
+}
