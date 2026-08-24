@@ -26,7 +26,36 @@ impl ChystikApp {
             ui.label(txt(s.app_name.as_str(), "title", COL_TEXT));
             ui.add_space(space(3.0));
 
-            let target_snapshot: Vec<ScanTarget> = self.targets.clone();
+            // Built from the same helper as the settings button, so the
+            // two match in height, padding and hover exactly. It marks
+            // where you are; the action on this bar is Scan, and an
+            // indicator must not compete with it. The shortcut lives in
+            // the tooltip rather than taking width on screen.
+            let dot_color = match self.section {
+                Section::Cleanup => COL_ACCENT,
+                Section::Disks => severity_color(Severity::Safe),
+                Section::Privacy => severity_color(Severity::Moderate),
+            };
+            if icon_button(ui, self.section.label(s), move |painter, centre, _| {
+                painter.rect_filled(
+                    egui::Rect::from_center_size(centre, egui::vec2(7.0, 7.0)),
+                    egui::Rounding::same(2.0),
+                    dot_color,
+                );
+            })
+            .on_hover_text(s.section_switch_hint.as_str())
+            .clicked()
+            {
+                self.palette_open = true;
+            }
+            ui.add_space(space(2.0));
+
+            let cleanup = self.section == Section::Cleanup;
+            let target_snapshot: Vec<ScanTarget> = if cleanup {
+                self.targets.clone()
+            } else {
+                Vec::new()
+            };
             let mut toggle_actions: Vec<(usize, bool)> = Vec::new();
             let mut add_folder_requested = false;
             ui.menu_button(truncate_middle(&self.roots_display, 30), |ui| {
@@ -90,16 +119,6 @@ impl ChystikApp {
                     .clicked()
                 {
                     self.start_scan();
-                }
-                if ghost_button(
-                    ui,
-                    s.export.as_str(),
-                    !self.findings.is_empty() && !scanning,
-                )
-                .on_hover_text(s.export_hint.as_str())
-                .clicked()
-                {
-                    self.export_json();
                 }
                 if ghost_button(ui, s.refresh_disks.as_str(), !scanning)
                     .on_hover_text(s.refresh_disks_hint.as_str())
@@ -850,5 +869,368 @@ impl ChystikApp {
                 }
             });
         });
+    }
+}
+
+impl ChystikApp {
+    // -- disks ---------------------------------------------------------------
+
+    /// What is attached, mounted or not.
+    ///
+    /// `df` and the file manager both answer "what is mounted"; the number
+    /// this view exists for is the other one. On the development machine
+    /// 1.5 TB of the 1.75 TB attached is in partitions nothing has mounted,
+    /// and no other tool says so.
+    pub(crate) fn disks_ui(&mut self, ui: &mut egui::Ui) {
+        use chystik_core::blockdev::{self, PartitionUse};
+
+        let s = self.s();
+        let attached = blockdev::total_attached_bytes(&self.drives);
+        let idle = blockdev::total_unmounted_bytes(&self.drives);
+        let in_use: u64 = self.drives.iter().map(|d| d.used_bytes()).sum();
+
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                egui::Frame::none()
+                    .inner_margin(egui::Margin::symmetric(space(6.0), space(5.0)))
+                    .show(ui, |ui| {
+                        if self.drives.is_empty() {
+                            ui.label(txt(s.disks_none.as_str(), "caption", COL_TEXT3));
+                            return;
+                        }
+
+                        ui.horizontal_top(|ui| {
+                            for (label, value, color) in [
+                                (s.disks_attached.as_str(), attached, COL_TEXT),
+                                (s.disks_in_use.as_str(), in_use, COL_TEXT2),
+                            ] {
+                                ui.vertical(|ui| {
+                                    ui.label(txt(label, "micro", COL_TEXT3));
+                                    ui.label(txt(format_size(value), "display", color));
+                                });
+                                ui.add_space(space(8.0));
+                            }
+                        });
+
+                        if idle > 0 {
+                            ui.add_space(space(4.0));
+                            egui::Frame::default()
+                                .fill(COL_SURFACE)
+                                .stroke(egui::Stroke::new(
+                                    1.0_f32,
+                                    severity_color(Severity::Moderate),
+                                ))
+                                .rounding(egui::Rounding::same(R_LG))
+                                .inner_margin(egui::Margin::same(space(4.0)))
+                                .show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        paint_severity_glyph(
+                                            ui,
+                                            Severity::Moderate,
+                                            11.0,
+                                            severity_color(Severity::Moderate),
+                                        );
+                                        ui.add_space(space(2.0));
+                                        ui.vertical(|ui| {
+                                            ui.label(txt(
+                                                i18n::fill(
+                                                    s.disks_idle_banner.as_str(),
+                                                    &[("size", &format_size(idle))],
+                                                ),
+                                                "strong",
+                                                COL_TEXT,
+                                            ));
+                                            ui.add_space(space(0.5));
+                                            ui.label(txt(
+                                                s.disks_idle_explain.as_str(),
+                                                "caption",
+                                                COL_TEXT2,
+                                            ));
+                                        });
+                                    });
+                                });
+                        }
+
+                        ui.add_space(space(5.0));
+                        for drive in &self.drives {
+                            egui::Frame::default()
+                                .fill(COL_SURFACE)
+                                .stroke(egui::Stroke::new(1.0_f32, COL_LINE))
+                                .rounding(egui::Rounding::same(R_LG))
+                                .inner_margin(egui::Margin::symmetric(space(4.5), space(4.0)))
+                                .show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.label(txt(&drive.name, "mono_lg", COL_TEXT));
+                                        ui.add_space(space(1.5));
+                                        ui.label(txt(&drive.model, "caption", COL_TEXT2));
+                                        ui.add_space(space(1.0));
+                                        egui::Frame::default()
+                                            .stroke(egui::Stroke::new(1.0_f32, COL_LINE_HI))
+                                            .rounding(egui::Rounding::same(R_SM))
+                                            .inner_margin(egui::Margin::symmetric(
+                                                space(1.5),
+                                                space(0.25),
+                                            ))
+                                            .show(ui, |ui| {
+                                                ui.label(txt(
+                                                    drive.kind.label(),
+                                                    "micro",
+                                                    COL_TEXT3,
+                                                ));
+                                            });
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                ui.label(txt(
+                                                    format_size(drive.size_bytes),
+                                                    "mono_lg",
+                                                    COL_TEXT,
+                                                ));
+                                            },
+                                        );
+                                    });
+                                    ui.add_space(space(2.5));
+
+                                    for partition in &drive.partitions {
+                                        ui.horizontal(|ui| {
+                                            ui.set_min_height(22.0);
+                                            ui.label(txt(&partition.name, "mono_sm", COL_TEXT2));
+                                            ui.add_space(space(2.0));
+                                            ui.label(txt(
+                                                format_size(partition.size_bytes),
+                                                "mono_sm",
+                                                COL_TEXT,
+                                            ));
+                                            ui.add_space(space(3.0));
+                                            match &partition.usage {
+                                                PartitionUse::Filesystem(m) => {
+                                                    ui.label(txt(&m.fs_type, "micro", COL_TEXT3));
+                                                    ui.add_space(space(1.5));
+                                                    ui.label(txt(
+                                                        m.mount_point.display().to_string(),
+                                                        "mono_sm",
+                                                        COL_TEXT,
+                                                    ));
+                                                    ui.with_layout(
+                                                        egui::Layout::right_to_left(
+                                                            egui::Align::Center,
+                                                        ),
+                                                        |ui| {
+                                                            ui.label(txt(
+                                                                i18n::fill(
+                                                                    s.disks_used.as_str(),
+                                                                    &[(
+                                                                        "pct",
+                                                                        &format!(
+                                                                            "{:.0}",
+                                                                            m.used_fraction()
+                                                                                * 100.0
+                                                                        ),
+                                                                    )],
+                                                                ),
+                                                                "caption",
+                                                                COL_TEXT2,
+                                                            ));
+                                                            usage_bar(
+                                                                ui,
+                                                                m.used_fraction(),
+                                                                160.0,
+                                                                COL_ACCENT,
+                                                            );
+                                                        },
+                                                    );
+                                                }
+                                                PartitionUse::Swap => {
+                                                    ui.label(txt(
+                                                        s.disks_swap.as_str(),
+                                                        "caption",
+                                                        COL_TEXT2,
+                                                    ));
+                                                }
+                                                PartitionUse::Idle => {
+                                                    ui.label(txt(
+                                                        s.disks_not_mounted.as_str(),
+                                                        "caption",
+                                                        severity_color(Severity::Moderate),
+                                                    ));
+                                                }
+                                            }
+                                        });
+                                    }
+                                });
+                            ui.add_space(space(3.0));
+                        }
+                    });
+            });
+    }
+
+    // -- privacy -------------------------------------------------------------
+
+    /// Traces of what you did, measured by what they reveal.
+    pub(crate) fn privacy_ui(&mut self, ui: &mut egui::Ui) {
+        let s = self.s();
+        let mut toggles: Vec<(usize, bool)> = Vec::new();
+
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                egui::Frame::none()
+                    .inner_margin(egui::Margin::symmetric(space(6.0), space(5.0)))
+                    .show(ui, |ui| {
+                        ui.label(txt(s.privacy_title.as_str(), "title", COL_TEXT));
+                        ui.add_space(space(1.5));
+                        ui.label(txt(s.privacy_lead.as_str(), "caption", COL_TEXT2));
+                        ui.add_space(space(1.0));
+                        ui.label(txt(
+                            s.privacy_nothing_preselected.as_str(),
+                            "micro",
+                            COL_TEXT3,
+                        ));
+                        ui.add_space(space(4.0));
+
+                        if self.traces.is_empty() {
+                            ui.label(txt(s.privacy_none.as_str(), "caption", COL_TEXT3));
+                            return;
+                        }
+
+                        for (i, trace) in self.traces.iter().enumerate() {
+                            let mut ticked = self.traces_selected.contains(&i);
+                            let color = severity_color(trace.severity);
+                            ui.horizontal_top(|ui| {
+                                ui.add_space(space(0.5));
+                                if ui.checkbox(&mut ticked, "").changed() {
+                                    toggles.push((i, ticked));
+                                }
+                                // A severity-coloured rule: the row's weight
+                                // is what it costs, not what it occupies.
+                                let (rule, _) = ui.allocate_exact_size(
+                                    egui::vec2(4.0, space(13.0)),
+                                    egui::Sense::hover(),
+                                );
+                                ui.painter()
+                                    .rect_filled(rule, egui::Rounding::same(2.0), color);
+                                ui.add_space(space(2.5));
+                                ui.vertical(|ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.label(txt(trace.kind.label(), "strong", COL_TEXT));
+                                        ui.add_space(space(1.5));
+                                        ui.label(txt(
+                                            short_home_path(&trace.path),
+                                            "mono_sm",
+                                            COL_TEXT3,
+                                        ));
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                ui.label(txt(
+                                                    format_size(trace.size_bytes),
+                                                    "mono_lg",
+                                                    COL_TEXT,
+                                                ));
+                                            },
+                                        );
+                                    });
+                                    ui.add_space(space(0.5));
+                                    ui.label(txt(
+                                        format!(
+                                            "{}: {}",
+                                            s.privacy_reveals.as_str(),
+                                            trace.reveals
+                                        ),
+                                        "caption",
+                                        COL_TEXT2,
+                                    ));
+                                    ui.label(txt(
+                                        format!("{}: {}", s.privacy_cost.as_str(), trace.cost),
+                                        "micro",
+                                        color,
+                                    ));
+                                });
+                            });
+                            ui.add_space(space(2.0));
+                            let line = ui.max_rect();
+                            ui.painter().hline(
+                                line.x_range(),
+                                ui.cursor().top(),
+                                egui::Stroke::new(1.0_f32, COL_LINE),
+                            );
+                            ui.add_space(space(2.0));
+                        }
+                    });
+            });
+
+        for (i, ticked) in toggles {
+            if ticked {
+                self.traces_selected.insert(i);
+            } else {
+                self.traces_selected.remove(&i);
+            }
+        }
+    }
+
+    /// Footer for the privacy view: what is ticked, and the one action.
+    pub(crate) fn privacy_footer_ui(&mut self, ui: &mut egui::Ui) {
+        let s = self.s();
+        let count = self.traces_selected.len();
+        let bytes = self.selected_trace_bytes();
+        ui.horizontal_centered(|ui| {
+            if count > 0 {
+                ui.label(txt(
+                    i18n::fill(
+                        s.privacy_selected.as_str(),
+                        &[("n", &count.to_string()), ("size", &format_size(bytes))],
+                    ),
+                    "caption",
+                    COL_TEXT2,
+                ));
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let label = if count > 0 {
+                    i18n::fill(s.privacy_clear.as_str(), &[("n", &count.to_string())])
+                } else {
+                    s.privacy_clear_idle.clone()
+                };
+                if primary_button(
+                    ui,
+                    &label,
+                    severity_color(Severity::Risky),
+                    count > 0 && !self.scanning(),
+                )
+                .on_hover_text(s.move_to_trash_hint.as_str())
+                .clicked()
+                {
+                    // Always confirmed, never acted on directly: this
+                    // erases a record of what someone did, and there is no
+                    // manifest step in front of it the way there is for a
+                    // cleanup.
+                    self.privacy_confirm_open = true;
+                }
+            });
+        });
+    }
+}
+
+/// A horizontal capacity bar.
+fn usage_bar(ui: &mut egui::Ui, fraction: f32, width: f32, color: egui::Color32) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 6.0), egui::Sense::hover());
+    let rounding = egui::Rounding::same(3.0);
+    ui.painter().rect_filled(rect, rounding, COL_LINE);
+    let filled = (fraction.clamp(0.0, 1.0) * rect.width()).max(2.0);
+    ui.painter().rect_filled(
+        egui::Rect::from_min_size(rect.min, egui::vec2(filled, rect.height())),
+        rounding,
+        color,
+    );
+}
+
+/// `$HOME` collapsed to `~`, which is how these paths are recognised.
+fn short_home_path(path: &std::path::Path) -> String {
+    let full = path.display().to_string();
+    match std::env::var("HOME") {
+        Ok(home) if !home.is_empty() && full.starts_with(&home) => {
+            format!("~{}", &full[home.len()..])
+        }
+        _ => full,
     }
 }

@@ -76,6 +76,19 @@ pub(crate) struct ChystikApp {
     pub(crate) exclusions_readable: bool,
     /// Decoded once on first use by the settings dialog.
     pub(crate) app_mark: Option<egui::TextureHandle>,
+    /// Which view is showing.
+    pub(crate) section: Section,
+    /// Ctrl+K section picker.
+    pub(crate) palette_open: bool,
+    /// Confirmation before erasing privacy traces. Always shown; there is
+    /// deliberately no way to suppress it.
+    pub(crate) privacy_confirm_open: bool,
+    /// Attached drives, refreshed on entering the Disks view.
+    pub(crate) drives: Vec<chystik_core::blockdev::Drive>,
+    /// Privacy traces, refreshed on entering the Privacy view.
+    pub(crate) traces: Vec<chystik_core::privacy::PrivacyItem>,
+    /// Indices into `traces` the user ticked. Never pre-populated.
+    pub(crate) traces_selected: HashSet<usize>,
     pub(crate) notice: Option<Notice>,
 }
 
@@ -120,6 +133,12 @@ impl Default for ChystikApp {
             exclusions: exclusions_loaded.0,
             exclusions_readable: exclusions_loaded.1,
             app_mark: None,
+            section: Section::default(),
+            palette_open: false,
+            privacy_confirm_open: false,
+            drives: Vec::new(),
+            traces: Vec::new(),
+            traces_selected: HashSet::new(),
             notice: None,
         }
     }
@@ -128,6 +147,77 @@ impl Default for ChystikApp {
 impl ChystikApp {
     pub(crate) fn scanning(&self) -> bool {
         matches!(self.state, ScanState::Scanning { .. })
+    }
+
+    /// Move to another view, loading whatever data it needs.
+    ///
+    /// Both new views read the machine directly rather than the scan, so
+    /// they are refreshed on entry: a drive can be plugged in, and a trace
+    /// can grow, while the window sits open.
+    pub(crate) fn go_to(&mut self, section: Section) {
+        self.section = section;
+        self.palette_open = false;
+        match section {
+            Section::Disks => self.drives = chystik_core::blockdev::drives(),
+            Section::Privacy => {
+                self.traces = chystik_core::privacy::probe();
+                self.traces_selected.clear();
+            }
+            Section::Cleanup => {}
+        }
+    }
+
+    /// Bytes of the privacy traces currently ticked.
+    pub(crate) fn selected_trace_bytes(&self) -> u64 {
+        self.traces_selected
+            .iter()
+            .filter_map(|i| self.traces.get(*i))
+            .map(|t| t.size_bytes)
+            .sum()
+    }
+
+    /// Send the ticked privacy traces to the trash, through the same
+    /// validated flow the cleaner uses.
+    pub(crate) fn clear_selected_traces(&mut self) {
+        use chystik_core::cleaner::{self, CleanupItem};
+
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let items: Vec<CleanupItem> = self
+            .traces_selected
+            .iter()
+            .filter_map(|i| self.traces.get(*i))
+            .map(|trace| CleanupItem {
+                path: trace.path.clone(),
+                size_bytes: trace.size_bytes,
+                // Traces live in $HOME by construction, so that is the root
+                // the guard validates against.
+                scan_root: home.clone(),
+            })
+            .collect();
+        if items.is_empty() {
+            return;
+        }
+        let outcome = cleaner::clean(&items, &cleaner::SystemTrash);
+        let loc = self.s();
+        let mut lines = vec![i18n::fill(
+            loc.trash_moved.as_str(),
+            &[
+                ("n", &outcome.removed_count().to_string()),
+                ("size", &format_size(outcome.freed_bytes)),
+            ],
+        )];
+        if outcome.skipped_count() > 0 {
+            lines.push(i18n::fill(
+                loc.trash_skipped.as_str(),
+                &[("n", &outcome.skipped_count().to_string())],
+            ));
+        }
+        self.notice = Some(Notice {
+            title: loc.trash_done_title.clone(),
+            lines,
+        });
+        self.traces = chystik_core::privacy::probe();
+        self.traces_selected.clear();
     }
 
     /// Localised interface strings for the active language.
@@ -342,10 +432,42 @@ impl eframe::App for ChystikApp {
         self.poll_scanner(ctx);
         self.ensure_view();
 
+        // Section shortcuts, ignored while a dialog owns the keyboard.
+        if !self.consent_pending && !self.confirm_delete_open && !self.settings_open {
+            let jump = ctx.input(|i| {
+                if i.modifiers.ctrl && i.key_pressed(egui::Key::K) {
+                    return Some(None);
+                }
+                for (n, key) in [
+                    (0, egui::Key::Num1),
+                    (1, egui::Key::Num2),
+                    (2, egui::Key::Num3),
+                ] {
+                    // Digits only when no text field has focus, or typing a
+                    // filter would teleport the user out of the view.
+                    if i.key_pressed(key) {
+                        return Some(Some(n));
+                    }
+                }
+                None
+            });
+            match jump {
+                Some(None) => self.palette_open = !self.palette_open,
+                Some(Some(n)) if !ctx.wants_keyboard_input() => {
+                    self.go_to(Section::ALL[n]);
+                }
+                _ => {}
+            }
+        }
+
         if self.consent_pending {
             // Deliberately first and exclusive: no scan, no selection and no
             // deletion is reachable until this is answered.
             self.show_consent_modal(ctx);
+        } else if self.privacy_confirm_open {
+            self.show_privacy_confirm(ctx);
+        } else if self.palette_open {
+            self.show_palette(ctx);
         } else if self.settings_open {
             self.show_settings_modal(ctx);
         } else if self.confirm_delete_open {
@@ -370,54 +492,71 @@ impl eframe::App for ChystikApp {
         // Fixed height whether or not a scan runs: a panel that appears
         // only while scanning shoved the whole table down and yanked it
         // back, twice per scan.
-        egui::TopBottomPanel::top("scan_status")
-            .exact_height(space(9.0))
-            .frame(
-                egui::Frame::none()
-                    .fill(COL_SURFACE)
-                    .inner_margin(egui::Margin::symmetric(space(4.0), 0.0)),
-            )
-            .show(ctx, |ui| {
-                hairline_bottom(ui);
-                self.scan_status_ui(ui, ctx);
-            });
+        // Only the cleanup view has a scan; the others read the machine
+        // directly and have nothing to report here.
+        if self.section == Section::Cleanup {
+            egui::TopBottomPanel::top("scan_status")
+                .exact_height(space(9.0))
+                .frame(
+                    egui::Frame::none()
+                        .fill(COL_SURFACE)
+                        .inner_margin(egui::Margin::symmetric(space(4.0), 0.0)),
+                )
+                .show(ctx, |ui| {
+                    hairline_bottom(ui);
+                    self.scan_status_ui(ui, ctx);
+                });
+        }
 
-        egui::TopBottomPanel::bottom("footer")
-            .exact_height(space(15.0))
-            .frame(
-                egui::Frame::none()
-                    .fill(COL_SURFACE)
-                    .inner_margin(egui::Margin::symmetric(space(4.0), space(2.0))),
-            )
-            .show(ctx, |ui| {
-                hairline_top(ui);
-                self.footer_ui(ui);
-            });
+        let footer = match self.section {
+            Section::Cleanup | Section::Privacy => true,
+            Section::Disks => false,
+        };
+        if footer {
+            egui::TopBottomPanel::bottom("footer")
+                .exact_height(space(15.0))
+                .frame(
+                    egui::Frame::none()
+                        .fill(COL_SURFACE)
+                        .inner_margin(egui::Margin::symmetric(space(4.0), space(2.0))),
+                )
+                .show(ctx, |ui| {
+                    hairline_top(ui);
+                    match self.section {
+                        Section::Privacy => self.privacy_footer_ui(ui),
+                        _ => self.footer_ui(ui),
+                    }
+                });
+        }
 
-        egui::SidePanel::left("categories")
-            .exact_width(SIDEBAR_W)
-            .resizable(false)
-            .frame(
-                egui::Frame::none()
-                    .fill(COL_SURFACE)
-                    .inner_margin(egui::Margin::symmetric(0.0, space(4.0))),
-            )
-            .show(ctx, |ui| {
-                self.sidebar_ui(ui);
-                // A hairline, not a void: the panels used to be separated by
-                // a black gutter that read as a rendering gap.
-                let r = ui.max_rect();
-                ui.painter().vline(
-                    r.right() - 0.5,
-                    r.y_range(),
-                    egui::Stroke::new(1.0_f32, COL_LINE),
-                );
-            });
+        // The category rail belongs to the cleanup view alone. Disks and
+        // Privacy are single-column: nothing to filter down.
+        if self.section == Section::Cleanup {
+            egui::SidePanel::left("categories")
+                .exact_width(SIDEBAR_W)
+                .resizable(false)
+                .frame(
+                    egui::Frame::none()
+                        .fill(COL_SURFACE)
+                        .inner_margin(egui::Margin::symmetric(0.0, space(4.0))),
+                )
+                .show(ctx, |ui| {
+                    self.sidebar_ui(ui);
+                    let r = ui.max_rect();
+                    ui.painter().vline(
+                        r.right() - 0.5,
+                        r.y_range(),
+                        egui::Stroke::new(1.0_f32, COL_LINE),
+                    );
+                });
+        }
 
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(COL_SURFACE))
-            .show(ctx, |ui| {
-                self.detail_ui(ui);
+            .show(ctx, |ui| match self.section {
+                Section::Cleanup => self.detail_ui(ui),
+                Section::Disks => self.disks_ui(ui),
+                Section::Privacy => self.privacy_ui(ui),
             });
     }
 }
@@ -665,67 +804,59 @@ impl ChystikApp {
     }
 
     pub(crate) fn execute_trash(&mut self, indices: Vec<usize>) {
-        let mut freed = 0u64;
-        let mut moved = 0usize;
-        let mut skipped = 0usize;
-        let mut errors = Vec::new();
+        use chystik_core::cleaner::{self, CleanupItem, SkipReason};
 
+        // Excluded and advisory rows are unselectable in the UI; filtering
+        // here as well means an exclusion added after the scan still holds.
+        let mut planned: Vec<(usize, CleanupItem)> = Vec::new();
+        let mut errors: Vec<String> = Vec::new();
+        let mut skipped = 0usize;
         for idx in indices {
             let Some(finding) = self.findings.get(idx) else {
                 continue;
             };
-            let path = finding.path.clone();
-            let size = finding.size_bytes;
-
-            // Advisory findings name system space Chystik cannot reclaim.
-            // They are unselectable in the UI; this is the backstop.
-            if !finding.is_actionable() {
+            if !finding.is_actionable()
+                || crate::exclusions::is_excluded(&finding.path, &self.exclusions)
+            {
                 skipped += 1;
                 continue;
             }
-            // Enforced a second time here: an exclusion added after the scan
-            // must still hold for findings already on screen.
-            if crate::exclusions::is_excluded(&path, &self.exclusions) {
-                skipped += 1;
-                continue;
-            }
+            planned.push((
+                idx,
+                CleanupItem {
+                    path: finding.path.clone(),
+                    size_bytes: finding.size_bytes,
+                    scan_root: self.owning_root(&finding.path).map(Path::to_path_buf),
+                },
+            ));
+        }
 
-            // Safety guard FIRST — refuse and log anything it rejects.
-            // Candidates must live under a configured target; that owning
-            // root is what the guard validates against.
-            let Some(target_root) = self.owning_root(&path) else {
-                skipped += 1;
-                errors.push(format!(
-                    "no scan target contains {}",
-                    truncate_middle(&path.display().to_string(), 48)
-                ));
-                continue;
-            };
-            if let Err(e) = chystik_core::guard::check(&path, target_root) {
-                eprintln!("[chystik] guard refused {}: {e}", path.display());
-                skipped += 1;
-                errors.push(format!(
-                    "guard refused {}: {e}",
-                    truncate_middle(&path.display().to_string(), 48)
-                ));
-                continue;
-            }
+        // The guard checks, the identity re-check and the tallying all live
+        // in core, where CI exercises them against a fake remover.
+        let items: Vec<CleanupItem> = planned.iter().map(|(_, item)| item.clone()).collect();
+        let outcome = cleaner::clean(&items, &cleaner::SystemTrash);
 
-            match trash::delete(&path) {
-                Ok(()) => {
-                    freed += size;
-                    moved += 1;
-                    self.deleted.insert(idx);
-                }
-                Err(e) => {
-                    eprintln!("[chystik] trash::delete failed {}: {e}", path.display());
-                    errors.push(format!(
-                        "trash failed {}: {e}",
-                        truncate_middle(&path.display().to_string(), 48)
-                    ));
-                }
+        let removed: std::collections::HashSet<&Path> =
+            outcome.removed.iter().map(PathBuf::as_path).collect();
+        for (idx, item) in &planned {
+            if removed.contains(item.path.as_path()) {
+                self.deleted.insert(*idx);
             }
         }
+        skipped += outcome.skipped_count();
+        for skip in &outcome.skipped {
+            let path = truncate_middle(&skip.path.display().to_string(), 48);
+            let detail = match &skip.reason {
+                SkipReason::OutsideEveryTarget => "outside every scan target".to_owned(),
+                SkipReason::Refused => "refused by the safety guard".to_owned(),
+                SkipReason::Advisory => "not Chystik's to delete".to_owned(),
+                SkipReason::ChangedUnderUs => "changed on disk during the operation".to_owned(),
+                SkipReason::RemoverFailed(e) => e.clone(),
+            };
+            eprintln!("[chystik] skipped {}: {detail}", skip.path.display());
+            errors.push(format!("{path}: {detail}"));
+        }
+        let (moved, freed) = (outcome.removed_count(), outcome.freed_bytes);
 
         // Drop stale selections after deletion; the table refreshes
         // automatically because deleted entries leave the cached view.
