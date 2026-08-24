@@ -203,12 +203,15 @@ impl ChystikApp {
                             .striped(false)
                             .show(ui, |ui| {
                                 for (_, path, size, sev, passed) in &items {
-                                    let (glyph, color) = if *passed {
-                                        ("\u{2713}", severity_color(Severity::Safe))
+                                    if *passed {
+                                        ui.label(txt(
+                                            "\u{2713}",
+                                            "strong",
+                                            severity_color(Severity::Safe),
+                                        ));
                                     } else {
-                                        ("\u{2717}", severity_color(Severity::Risky))
-                                    };
-                                    ui.label(txt(glyph, "strong", color));
+                                        paint_cross(ui, 12.0, severity_color(Severity::Risky));
+                                    }
                                     ui.with_layout(
                                         egui::Layout::right_to_left(egui::Align::Center),
                                         |ui| {
@@ -301,6 +304,10 @@ impl ChystikApp {
         let mut open_repo = false;
         let mut next_lang: Option<Lang> = None;
         let mut add_exclusion = false;
+        if self.app_mark.is_none() {
+            self.app_mark = app_mark(ctx);
+        }
+        let mark = self.app_mark.clone();
         let mut unexclude: Option<std::path::PathBuf> = None;
 
         dim_backdrop(ctx, "settings_backdrop");
@@ -318,7 +325,20 @@ impl ChystikApp {
             )
             .show(ctx, |ui| {
                 ui.set_width(400.0);
-                ui.label(txt(s.settings.as_str(), "title", COL_TEXT));
+                ui.horizontal(|ui| {
+                    if let Some(mark) = &mark {
+                        ui.add(
+                            egui::Image::new(mark)
+                                .fit_to_exact_size(egui::vec2(40.0, 40.0))
+                                .rounding(egui::Rounding::same(R_LG)),
+                        );
+                        ui.add_space(space(2.5));
+                    }
+                    ui.vertical(|ui| {
+                        ui.label(txt(s.settings.as_str(), "title", COL_TEXT));
+                        ui.label(txt(s.app_name.as_str(), "caption", COL_TEXT2));
+                    });
+                });
                 ui.add_space(space(4.0));
 
                 ui.label(txt(s.settings_language.as_str(), "micro", COL_TEXT3));

@@ -74,6 +74,8 @@ pub(crate) struct ChystikApp {
     /// False when the stored list could not be read; the UI says so rather
     /// than silently behaving as if nothing was excluded.
     pub(crate) exclusions_readable: bool,
+    /// Decoded once on first use by the settings dialog.
+    pub(crate) app_mark: Option<egui::TextureHandle>,
     pub(crate) notice: Option<Notice>,
 }
 
@@ -117,6 +119,7 @@ impl Default for ChystikApp {
             consent_checked: false,
             exclusions: exclusions_loaded.0,
             exclusions_readable: exclusions_loaded.1,
+            app_mark: None,
             notice: None,
         }
     }
@@ -461,6 +464,11 @@ impl ChystikApp {
         self.live_bytes = 0;
         self.progress_text.clear();
         self.category_filter = CategoryFilter::All;
+        // The view holds INDICES into `findings`, and this runs from a panel
+        // — after `ensure_view` has already built them for this frame. Only
+        // clearing the stamp left the table indexing a vector it had just
+        // emptied, which is why a second press of Scan panicked.
+        self.view = ViewCache::default();
         self.view_stamp = None;
     }
 
@@ -544,7 +552,11 @@ impl ChystikApp {
                         self.findings.push(*finding);
                     }
                     ScanProgress::Finished { findings } => {
+                        // Wholesale replacement: the streamed list and the
+                        // final one can have the same length with different
+                        // contents, which the stamp cannot tell apart.
                         self.findings = findings;
+                        self.view_stamp = None;
                         self.live_bytes = self.findings.iter().map(|f| f.size_bytes).sum();
                         self.dir_count = 0;
                         self.refresh_disks(); // free space moved during the walk
@@ -737,5 +749,84 @@ impl ChystikApp {
             title: loc.trash_done_title.to_string(),
             lines: info,
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chystik_core::model::Severity;
+
+    /// An app seeded with findings, ready for `ensure_view`.
+    fn app_with(findings: Vec<Finding>) -> ChystikApp {
+        ChystikApp {
+            findings,
+            ..Default::default()
+        }
+    }
+
+    fn finding(path: &str, size: u64) -> Finding {
+        Finding {
+            path: PathBuf::from(path),
+            category: Category::PackageCaches,
+            severity: Severity::Safe,
+            size_bytes: size,
+            last_used: None,
+            mount: None,
+            note: "test".into(),
+            advice: None,
+        }
+    }
+
+    /// Pressing Scan a second time used to panic.
+    ///
+    /// The frame order is poll → `ensure_view` → panels, and the Scan button
+    /// lives in a panel: `reset_results` therefore emptied `findings` AFTER
+    /// the cached view had been built, and the table then indexed a vector
+    /// that no longer had those elements. The first press was harmless
+    /// because there was nothing to index yet.
+    #[test]
+    fn resetting_results_invalidates_the_cached_view() {
+        let mut app = app_with(vec![finding("/a", 10), finding("/b", 20)]);
+        app.ensure_view();
+        assert_eq!(app.view.rows.len(), 2, "fixture should produce rows");
+
+        app.reset_results();
+
+        assert!(
+            app.view.rows.is_empty(),
+            "the view still indexes {} findings that no longer exist",
+            app.view.rows.len()
+        );
+        assert!(app.view.cat_stats.is_empty());
+        assert_eq!(app.view.all_bytes, 0);
+    }
+
+    /// Replacing the findings wholesale must invalidate the view even when
+    /// the length is unchanged — the stamp compares lengths, not contents.
+    #[test]
+    fn replacing_findings_of_equal_length_still_rebuilds() {
+        let mut app = app_with(vec![finding("/a", 10)]);
+        app.ensure_view();
+        assert_eq!(app.view.all_bytes, 10);
+
+        app.findings = vec![finding("/b", 99)];
+        app.view_stamp = None; // what poll_scanner does on Finished
+        app.ensure_view();
+        assert_eq!(app.view.all_bytes, 99, "the view kept the old contents");
+    }
+
+    /// Every cached index must be addressable, whatever the app has done.
+    #[test]
+    fn cached_rows_never_outlive_their_findings() {
+        let mut app = app_with(vec![finding("/a", 10)]);
+        app.ensure_view();
+        app.reset_results();
+        for &i in &app.view.rows {
+            assert!(
+                app.findings.get(i).is_some(),
+                "row {i} points past the end of findings"
+            );
+        }
     }
 }

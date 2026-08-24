@@ -29,30 +29,27 @@ impl ChystikApp {
             let target_snapshot: Vec<ScanTarget> = self.targets.clone();
             let mut toggle_actions: Vec<(usize, bool)> = Vec::new();
             let mut add_folder_requested = false;
-            ui.menu_button(
-                format!("{}  \u{25BE}", truncate_middle(&self.roots_display, 30)),
-                |ui| {
-                    ui.set_min_width(280.0);
-                    if target_snapshot.is_empty() {
-                        ui.label(txt(s.no_disks.as_str(), "caption", COL_TEXT2));
+            ui.menu_button(truncate_middle(&self.roots_display, 30), |ui| {
+                ui.set_min_width(280.0);
+                if target_snapshot.is_empty() {
+                    ui.label(txt(s.no_disks.as_str(), "caption", COL_TEXT2));
+                }
+                for (i, t) in target_snapshot.iter().enumerate() {
+                    let mut on = t.enabled;
+                    if ui.checkbox(&mut on, &t.label).changed() {
+                        toggle_actions.push((i, on));
                     }
-                    for (i, t) in target_snapshot.iter().enumerate() {
-                        let mut on = t.enabled;
-                        if ui.checkbox(&mut on, &t.label).changed() {
-                            toggle_actions.push((i, on));
-                        }
-                    }
-                    ui.separator();
-                    if ui
-                        .button(s.add_folder.as_str())
-                        .on_hover_text(s.add_folder_hint.as_str())
-                        .clicked()
-                    {
-                        add_folder_requested = true;
-                        ui.close_menu();
-                    }
-                },
-            )
+                }
+                ui.separator();
+                if ui
+                    .button(s.add_folder.as_str())
+                    .on_hover_text(s.add_folder_hint.as_str())
+                    .clicked()
+                {
+                    add_folder_requested = true;
+                    ui.close_menu();
+                }
+            })
             .response
             .on_hover_text(s.targets_hint.as_str());
             for (i, on) in toggle_actions {
@@ -110,18 +107,7 @@ impl ChystikApp {
                 {
                     self.refresh_disks();
                 }
-                if ui
-                    .add(
-                        egui::Button::new(txt(
-                            format!("\u{2699}  {}", lang.code()),
-                            "micro",
-                            COL_TEXT2,
-                        ))
-                        .fill(egui::Color32::TRANSPARENT)
-                        .stroke(egui::Stroke::new(1.0_f32, COL_LINE))
-                        .rounding(egui::Rounding::same(R_MD))
-                        .min_size(egui::vec2(space(12.0), space(8.0))),
-                    )
+                if icon_button(ui, lang.code(), draw_settings_mark)
                     .on_hover_text(s.settings_hint.as_str())
                     .clicked()
                 {
@@ -195,7 +181,7 @@ impl ChystikApp {
         ui.vertical(|ui| {
             ui.add_space(space(1.0));
             ui.horizontal(|ui| {
-                ui.add_space(space(5.0));
+                ui.add_space(SIDEBAR_PAD);
                 ui.vertical(|ui| {
                     ui.label(txt(s.reclaimable.as_str(), "micro", COL_TEXT3));
                     ui.add_space(space(0.5));
@@ -213,7 +199,7 @@ impl ChystikApp {
                         COL_TEXT2,
                     ));
                     ui.add_space(space(2.5));
-                    severity_bar(ui, buckets, SIDEBAR_W - space(10.0), 6.0);
+                    severity_bar(ui, buckets, SIDEBAR_W - SIDEBAR_PAD * 2.0, 6.0);
                     ui.add_space(space(1.5));
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = space(1.0);
@@ -236,10 +222,7 @@ impl ChystikApp {
             });
 
             ui.add_space(space(3.5));
-            ui.horizontal_wrapped(|ui| {
-                ui.add_space(space(3.5));
-                self.severity_segments_ui(ui);
-            });
+            self.severity_segments_ui(ui);
             ui.add_space(space(2.5));
 
             let selected = self.category_filter;
@@ -250,7 +233,7 @@ impl ChystikApp {
                     if self.view.cat_stats.is_empty() {
                         ui.add_space(space(4.0));
                         ui.horizontal(|ui| {
-                            ui.add_space(space(5.0));
+                            ui.add_space(SIDEBAR_PAD);
                             ui.label(txt(s.nothing_found.as_str(), "caption", COL_TEXT3));
                         });
                         return;
@@ -288,12 +271,14 @@ impl ChystikApp {
     }
 
     /// Three-way severity segmented control, replacing the combo box.
+    /// Four severity filters as a 2x2 grid.
+    ///
+    /// A wrapping row put the second line back at the container's left edge
+    /// instead of the sidebar indent, so the control had two different left
+    /// margins. Ukrainian labels are half again as long as the English ones,
+    /// which is what made it wrap in the first place.
     pub(crate) fn severity_segments_ui(&mut self, ui: &mut egui::Ui) {
         let (lang, s) = (self.lang, self.s());
-        // Ukrainian labels are half again as long as the English ones, so
-        // the row wraps rather than running under the detail panel.
-        ui.spacing_mut().item_spacing = egui::vec2(space(1.0), space(1.0));
-        ui.set_max_width(SIDEBAR_W - space(7.0));
         let options = [
             (
                 SeverityFilter::All,
@@ -320,25 +305,48 @@ impl ChystikApp {
                 s.filter_risky_hint.as_str(),
             ),
         ];
-        for (value, label, color, hint) in options {
-            let active = self.severity_filter == value;
-            let (fill, stroke, fg) = if active {
-                (COL_ACCENT_SOFT, COL_ACCENT, COL_TEXT)
-            } else {
-                (egui::Color32::TRANSPARENT, COL_LINE, color)
-            };
-            let resp = ui
-                .add(
-                    egui::Button::new(txt(label, "micro", fg))
-                        .fill(fill)
-                        .stroke(egui::Stroke::new(1.0_f32, stroke))
-                        .rounding(egui::Rounding::same(R_MD))
-                        .min_size(egui::vec2(0.0, space(6.5))),
-                )
-                .on_hover_text(hint);
-            if resp.clicked() {
-                self.severity_filter = value;
-            }
+
+        const GAP: f32 = 6.0;
+        let cell = (SIDEBAR_W - SIDEBAR_PAD * 2.0 - GAP) / 2.0;
+        let mut chosen: Option<SeverityFilter> = None;
+
+        egui::Frame::none()
+            .inner_margin(egui::Margin::symmetric(SIDEBAR_PAD, 0.0))
+            .show(ui, |ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(GAP, GAP);
+                egui::Grid::new("severity_segments")
+                    .num_columns(2)
+                    .spacing(egui::vec2(GAP, GAP))
+                    .show(ui, |ui| {
+                        for (i, (value, label, color, hint)) in options.into_iter().enumerate() {
+                            let active = self.severity_filter == value;
+                            let (fill, stroke, fg) = if active {
+                                (COL_ACCENT_SOFT, COL_ACCENT, COL_TEXT)
+                            } else {
+                                (egui::Color32::TRANSPARENT, COL_LINE, color)
+                            };
+                            if ui
+                                .add(
+                                    egui::Button::new(txt(label, "micro", fg))
+                                        .fill(fill)
+                                        .stroke(egui::Stroke::new(1.0_f32, stroke))
+                                        .rounding(egui::Rounding::same(R_MD))
+                                        .min_size(egui::vec2(cell, space(6.5))),
+                                )
+                                .on_hover_text(hint)
+                                .clicked()
+                            {
+                                chosen = Some(value);
+                            }
+                            if i % 2 == 1 {
+                                ui.end_row();
+                            }
+                        }
+                    });
+            });
+
+        if let Some(value) = chosen {
+            self.severity_filter = value;
         }
     }
 
@@ -586,13 +594,12 @@ impl ChystikApp {
 
                             row.col(|ui| {
                                 if let Some(command) = finding.advice.as_deref() {
-                                    ui.label(txt("\u{2139}", "caption", COL_ACCENT))
-                                        .on_hover_text(format!(
-                                            "{}\n\n{}\n{}",
-                                            s.advice_label.as_str(),
-                                            s.advice_run.as_str(),
-                                            command
-                                        ));
+                                    paint_info_mark(ui, 13.0, COL_ACCENT).on_hover_text(format!(
+                                        "{}\n\n{}\n{}",
+                                        s.advice_label.as_str(),
+                                        s.advice_run.as_str(),
+                                        command
+                                    ));
                                 } else if risky {
                                     // Never bulk-selectable: say why instead
                                     // of showing a dead checkbox.
@@ -624,8 +631,18 @@ impl ChystikApp {
                                         // the underscore in `node_modules`,
                                         // which the tight stack clipped.
                                         ui.set_min_height(17.0);
-                                        ui.label(txt(head, "mono_sm", COL_TEXT3));
-                                        ui.label(txt(tail, "strong", COL_TEXT));
+                                        // Truncated by PIXEL width, not
+                                        // character count: a fixed character
+                                        // budget makes every row end in a
+                                        // different place.
+                                        ui.add(
+                                            egui::Label::new(txt(head, "mono_sm", COL_TEXT3))
+                                                .truncate(),
+                                        );
+                                        ui.add(
+                                            egui::Label::new(txt(tail, "strong", COL_TEXT))
+                                                .truncate(),
+                                        );
                                     });
                                     ui.add_space(1.0);
                                     match finding.advice.as_deref() {
@@ -640,6 +657,7 @@ impl ChystikApp {
                                                 egui::Label::new(txt(
                                                     command, "mono_sm", COL_ACCENT,
                                                 ))
+                                                .truncate()
                                                 .sense(egui::Sense::click()),
                                             );
                                             if hit
@@ -654,11 +672,14 @@ impl ChystikApp {
                                             }
                                         }
                                         None => {
-                                            ui.label(txt(
-                                                truncate_middle(&finding.note, 92),
-                                                "micro",
-                                                COL_TEXT3,
-                                            ));
+                                            ui.add(
+                                                egui::Label::new(txt(
+                                                    &finding.note,
+                                                    "micro",
+                                                    COL_TEXT3,
+                                                ))
+                                                .truncate(),
+                                            );
                                         }
                                     }
                                 })
@@ -692,7 +713,10 @@ impl ChystikApp {
                             });
 
                             row.col(|ui| {
-                                severity_pill(ui, finding.severity, lang);
+                                ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                                    ui.add_space((ROW_H - 19.0) / 2.0);
+                                    severity_pill(ui, finding.severity, lang);
+                                });
                             });
 
                             row.col(|ui| {
