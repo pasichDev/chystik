@@ -262,6 +262,7 @@ mod tests {
             last_used: None,
             mount: mount.map(String::from),
             note: String::new(),
+            advice: None,
         }
     }
 

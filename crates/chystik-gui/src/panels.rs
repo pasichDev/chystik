@@ -382,7 +382,12 @@ impl ChystikApp {
             .rows
             .iter()
             .copied()
-            .filter(|i| self.findings[*i].severity != Severity::Risky)
+            .filter(|i| {
+                let f = &self.findings[*i];
+                // Risky needs a deliberate tick; advisory is not ours to
+                // delete at all.
+                f.severity != Severity::Risky && f.is_actionable()
+            })
             .collect();
         let selectable_bytes: u64 = selectable
             .iter()
@@ -477,6 +482,8 @@ impl ChystikApp {
         let sort_asc = self.sort_asc;
         let mut row_toggles: Vec<(usize, bool)> = Vec::new();
         let mut sort_click: Option<(SortCol, bool)> = None;
+        let mut exclude_request: Option<std::path::PathBuf> = None;
+        let mut copied = false;
 
         if rows.is_empty() {
             ui.add_space(space(14.0));
@@ -578,7 +585,15 @@ impl ChystikApp {
                             let mut checked = selected.contains(&idx);
 
                             row.col(|ui| {
-                                if risky {
+                                if let Some(command) = finding.advice.as_deref() {
+                                    ui.label(txt("\u{2139}", "caption", COL_ACCENT))
+                                        .on_hover_text(format!(
+                                            "{}\n\n{}\n{}",
+                                            s.advice_label.as_str(),
+                                            s.advice_run.as_str(),
+                                            command
+                                        ));
+                                } else if risky {
                                     // Never bulk-selectable: say why instead
                                     // of showing a dead checkbox.
                                     paint_severity_glyph(
@@ -613,11 +628,39 @@ impl ChystikApp {
                                         ui.label(txt(tail, "strong", COL_TEXT));
                                     });
                                     ui.add_space(1.0);
-                                    ui.label(txt(
-                                        truncate_middle(&finding.note, 92),
-                                        "micro",
-                                        COL_TEXT3,
-                                    ));
+                                    match finding.advice.as_deref() {
+                                        // For advisory rows the command IS
+                                        // the useful line; the note is in
+                                        // the tooltip.
+                                        Some(command) => {
+                                            // Clicking copies it: the row is
+                                            // useless unless the command can
+                                            // reach a terminal.
+                                            let hit = ui.add(
+                                                egui::Label::new(txt(
+                                                    command, "mono_sm", COL_ACCENT,
+                                                ))
+                                                .sense(egui::Sense::click()),
+                                            );
+                                            if hit
+                                                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                                .on_hover_text(s.advice_copy.as_str())
+                                                .clicked()
+                                            {
+                                                ui.output_mut(|o| {
+                                                    o.copied_text = command.to_owned()
+                                                });
+                                                copied = true;
+                                            }
+                                        }
+                                        None => {
+                                            ui.label(txt(
+                                                truncate_middle(&finding.note, 92),
+                                                "micro",
+                                                COL_TEXT3,
+                                            ));
+                                        }
+                                    }
                                 })
                                 .response
                                 .on_hover_text(format!(
@@ -626,7 +669,13 @@ impl ChystikApp {
                                     finding.note,
                                     i18n::severity_label(lang, finding.severity),
                                     i18n::severity_cost(lang, finding.severity),
-                                ));
+                                ))
+                                .context_menu(|ui| {
+                                    if ui.button(s.exclusions_add.as_str()).clicked() {
+                                        exclude_request = Some(finding.path.clone());
+                                        ui.close_menu();
+                                    }
+                                });
                             });
 
                             row.col(|ui| {
@@ -668,6 +717,15 @@ impl ChystikApp {
         if let Some((col, default_asc)) = sort_click {
             self.apply_header_click(col, default_asc);
         }
+        if let Some(path) = exclude_request {
+            self.exclude_path(path);
+        }
+        if copied {
+            self.notice = Some(crate::app::Notice {
+                title: s.advice_copied.clone(),
+                lines: vec![s.advice_run.clone()],
+            });
+        }
         for (idx, checked) in row_toggles {
             if checked {
                 self.selected.insert(idx);
@@ -700,6 +758,25 @@ impl ChystikApp {
                     "caption",
                     COL_TEXT3,
                 ));
+                let advisory_bytes: u64 = self
+                    .view
+                    .rows
+                    .iter()
+                    .map(|i| &self.findings[*i])
+                    .filter(|f| !f.is_actionable())
+                    .map(|f| f.size_bytes)
+                    .sum();
+                if advisory_bytes > 0 {
+                    ui.label(txt("\u{b7}", "caption", COL_TEXT3));
+                    ui.label(txt(
+                        i18n::fill(
+                            s.shown_advisory.as_str(),
+                            &[("size", &format_size(advisory_bytes))],
+                        ),
+                        "caption",
+                        COL_ACCENT,
+                    ));
+                }
             } else {
                 ui.label(txt(sel_count.to_string(), "strong", COL_TEXT));
                 ui.label(txt(s.selected_word.as_str(), "caption", COL_TEXT2));

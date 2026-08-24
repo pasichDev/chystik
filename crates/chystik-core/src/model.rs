@@ -141,6 +141,24 @@ pub struct Finding {
     pub mount: Option<String>,
     /// Short explanation shown in UI (why this is reclaimable + how to restore).
     pub note: String,
+    /// Set when Chystik cannot reclaim this itself — the space sits behind a
+    /// package manager or needs root — and the string is the command that
+    /// does reclaim it.
+    ///
+    /// The guard refuses `/var` and `/usr` outright, so these locations used
+    /// to be invisible: several gigabytes of superseded snap revisions and
+    /// package archives that the tool knew about and never mentioned.
+    /// Advisory findings are reported, never selected and never deleted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub advice: Option<String>,
+}
+
+impl Finding {
+    /// True when this finding is Chystik's to delete. Advisory findings are
+    /// excluded from every selection, total and deletion path.
+    pub fn is_actionable(&self) -> bool {
+        self.advice.is_none()
+    }
 }
 
 /// Progress events emitted by the scanner while walking the filesystem.

@@ -28,6 +28,82 @@ pub(crate) struct Match {
     pub note: String,
 }
 
+/// A rule that judges a whole directory's CHILDREN together rather than one
+/// path in isolation.
+///
+/// `classify` sees a single path and knows nothing about its siblings, so
+/// every versioned store was all-or-nothing: `~/.local/share/claude/versions`
+/// holds three builds of which one runs, and the only expressible answers
+/// were "delete all of it" (breaking the tool) or silence. The scanner
+/// already receives the full child list in `process_read_dir`, so ordering
+/// them and sparing the newest few costs nothing extra.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct GroupRule {
+    /// `$HOME`-relative path of the PARENT directory.
+    pub rel: &'static str,
+    pub category: Category,
+    pub severity: Severity,
+    /// How many of the newest children to spare.
+    pub keep: usize,
+    pub note: &'static str,
+}
+
+/// Versioned stores that keep every revision they ever downloaded.
+///
+/// Ordering is by modification time, which is right for these: each entry is
+/// written once, when that version is fetched. Stores whose names carry no
+/// time order — `.rustup/toolchains` holds `stable`, `nightly`, `1.75` — are
+/// deliberately absent; "newest by mtime" would be a guess there.
+pub(crate) const GROUP_RULES: &[GroupRule] = &[
+    GroupRule {
+        rel: ".local/share/claude/versions",
+        category: Category::AiAgents,
+        severity: Severity::Moderate,
+        keep: 1,
+        note: "superseded Claude Code build — the current one is kept",
+    },
+    GroupRule {
+        rel: ".codex/packages/standalone/releases",
+        category: Category::AiAgents,
+        severity: Severity::Moderate,
+        keep: 1,
+        note: "superseded Codex CLI build — the current one is kept",
+    },
+    GroupRule {
+        rel: ".nvm/versions/node",
+        category: Category::IdeToolchains,
+        severity: Severity::Moderate,
+        keep: 1,
+        note: "older Node.js install — reinstall with `nvm install <version>`",
+    },
+    GroupRule {
+        rel: ".local/share/JetBrains/Toolbox/apps",
+        category: Category::Installers,
+        severity: Severity::Moderate,
+        keep: 1,
+        note: "superseded Toolbox build — the current one is kept",
+    },
+];
+
+/// The group rule covering `dir`, if any.
+pub(crate) fn classify_group(dir: &Path) -> Option<&'static GroupRule> {
+    let home = home_root()?;
+    let rel = if let Ok(rel) = dir.strip_prefix(&home) {
+        rel.to_string_lossy().replace('\\', "/")
+    } else if std::env::var_os("CHYSTIK_TEST_HOME").is_some() {
+        let text = dir.to_string_lossy().replace('\\', "/");
+        GROUP_RULES
+            .iter()
+            .map(|r| r.rel)
+            .filter(|suffix| text.ends_with(suffix))
+            .max_by_key(|suffix| suffix.len())?
+            .to_owned()
+    } else {
+        return None;
+    };
+    GROUP_RULES.iter().find(|r| r.rel == rel)
+}
+
 /// `$HOME` for production matching; `CHYSTIK_TEST_HOME` overrides it in
 /// tests so fixtures never touch real user data.
 pub(crate) fn home_root() -> Option<PathBuf> {

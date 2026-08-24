@@ -67,18 +67,10 @@ pub(crate) fn classify(dir: &Path) -> Option<Match> {
             SAFE,
             "aider repo-map cache — rebuilt automatically on the next aider run".into(),
         ),
-        // Downloaded agent runtimes. These are per-version copies of the
-        // CLI itself; only the newest is ever executed, but the rule
-        // contract cannot express "keep newest N" yet, so the whole
-        // directory is offered and the note says what that costs.
-        ".local/share/claude/versions" => (
-            MOD,
-            "downloaded Claude Code builds — the CLI re-downloads the version it needs".into(),
-        ),
-        ".codex/packages/standalone/releases" => (
-            MOD,
-            "downloaded Codex CLI builds — re-downloaded on the next launch".into(),
-        ),
+        // Downloaded agent runtimes are handled by GROUP rules in
+        // `rules::GROUP_RULES`, which spare the newest build and report the
+        // superseded ones individually. Claiming the parent here would
+        // prune the walk before the group rule ever sees the children.
         ".opencode/bin" => (
             MOD,
             "downloaded opencode runtime binaries — re-downloaded on the next launch".into(),

@@ -101,7 +101,18 @@
     "consent_p5_body": "Chystik shows a full manifest before it deletes anything. Read it — the rules can be wrong about your machine.",
     "consent_checkbox": "I understand, and I will review the list before confirming a deletion",
     "consent_continue": "Continue",
-    "consent_quit": "Quit"
+    "consent_quit": "Quit",
+    "exclusions_title": "Never touch these",
+    "exclusions_hint": "Excluded folders are not scanned, not shown and never deleted.",
+    "exclusions_add": "Exclude a folder…",
+    "exclusions_remove": "Remove",
+    "exclusions_empty": "Nothing is excluded.",
+    "exclusions_unreadable": "The exclusion list could not be read — nothing is excluded this session.",
+    "advice_label": "Chystik cannot reclaim this",
+    "advice_run": "Run this yourself:",
+    "advice_copy": "Copy command",
+    "advice_copied": "Copied",
+    "shown_advisory": "{size} more needs a command you run yourself"
   },
   "categories": {
     "build_artifacts": {

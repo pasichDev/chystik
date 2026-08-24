@@ -300,6 +300,8 @@ impl ChystikApp {
         let mut close = false;
         let mut open_repo = false;
         let mut next_lang: Option<Lang> = None;
+        let mut add_exclusion = false;
+        let mut unexclude: Option<std::path::PathBuf> = None;
 
         dim_backdrop(ctx, "settings_backdrop");
         egui::Window::new("settings")
@@ -353,6 +355,73 @@ impl ChystikApp {
                 );
                 ui.add_space(space(4.0));
 
+                ui.label(txt(s.exclusions_title.as_str(), "micro", COL_TEXT3));
+                ui.add_space(space(1.0));
+                ui.label(txt(s.exclusions_hint.as_str(), "caption", COL_TEXT2));
+                ui.add_space(space(2.0));
+
+                if !self.exclusions_readable {
+                    ui.label(txt(
+                        s.exclusions_unreadable.as_str(),
+                        "caption",
+                        severity_color(Severity::Moderate),
+                    ));
+                    ui.add_space(space(1.5));
+                }
+
+                if self.exclusions.is_empty() {
+                    ui.label(txt(s.exclusions_empty.as_str(), "caption", COL_TEXT3));
+                } else {
+                    egui::ScrollArea::vertical()
+                        .id_salt("exclusions_list")
+                        .max_height(120.0)
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            for path in self.exclusions.clone() {
+                                ui.horizontal(|ui| {
+                                    ui.label(txt(
+                                        truncate_middle(&path.display().to_string(), 52),
+                                        "mono_sm",
+                                        COL_TEXT,
+                                    ))
+                                    .on_hover_text(path.display().to_string());
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            if ui
+                                                .add(
+                                                    egui::Button::new(txt(
+                                                        s.exclusions_remove.as_str(),
+                                                        "micro",
+                                                        COL_TEXT2,
+                                                    ))
+                                                    .fill(egui::Color32::TRANSPARENT)
+                                                    .stroke(egui::Stroke::new(1.0_f32, COL_LINE))
+                                                    .rounding(egui::Rounding::same(R_SM)),
+                                                )
+                                                .clicked()
+                                            {
+                                                unexclude = Some(path.clone());
+                                            }
+                                        },
+                                    );
+                                });
+                            }
+                        });
+                }
+                ui.add_space(space(2.0));
+                if ghost_button(ui, s.exclusions_add.as_str(), true).clicked() {
+                    add_exclusion = true;
+                }
+
+                ui.add_space(space(5.0));
+                ui.painter().hline(
+                    ui.max_rect().x_range(),
+                    ui.cursor().top(),
+                    egui::Stroke::new(1.0_f32, COL_LINE),
+                );
+                ui.add_space(space(4.0));
+
                 egui::Grid::new("about_grid")
                     .num_columns(2)
                     .spacing(egui::vec2(space(4.0), space(2.0)))
@@ -390,6 +459,14 @@ impl ChystikApp {
 
         if let Some(next) = next_lang {
             self.lang = next;
+        }
+        if let Some(path) = unexclude {
+            self.unexclude(&path);
+        }
+        if add_exclusion {
+            if let Some(dir) = rfd::FileDialog::new().pick_folder() {
+                self.exclude_path(dir);
+            }
         }
         if open_repo {
             // eframe only forwards `open_url` when built with a browser

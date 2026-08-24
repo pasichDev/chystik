@@ -68,6 +68,12 @@ pub(crate) struct ChystikApp {
     pub(crate) consent_pending: bool,
     /// Ticked in that dialog; `Continue` stays disabled until it is.
     pub(crate) consent_checked: bool,
+    /// Paths the user marked never-touch. Passed to the scanner as prunes
+    /// and re-checked before any deletion.
+    pub(crate) exclusions: Vec<PathBuf>,
+    /// False when the stored list could not be read; the UI says so rather
+    /// than silently behaving as if nothing was excluded.
+    pub(crate) exclusions_readable: bool,
     pub(crate) notice: Option<Notice>,
 }
 
@@ -79,6 +85,7 @@ pub(crate) struct Notice {
 /// Inputs the cached view depends on. Any change forces a rebuild.
 impl Default for ChystikApp {
     fn default() -> Self {
+        let exclusions_loaded = crate::exclusions::load();
         // Placeholder receiver replaced on first scan; never yields events.
         let (_tx, rx) = channel::<ScanProgress>();
         Self {
@@ -108,6 +115,8 @@ impl Default for ChystikApp {
             settings_open: false,
             consent_pending: !crate::consent::is_acknowledged(),
             consent_checked: false,
+            exclusions: exclusions_loaded.0,
+            exclusions_readable: exclusions_loaded.1,
             notice: None,
         }
     }
@@ -472,11 +481,15 @@ impl ChystikApp {
         self.progress_text = format!("Scanning {} target(s)\u{2026}", roots.len());
         self.notice = None;
 
+        let exclusions = self.exclusions.clone();
         let cancel_for_thread = Arc::clone(&cancel_flag);
         let spawned = std::thread::Builder::new()
             .name("chystik-scanner".to_string())
             .spawn(move || {
-                let options = chystik_core::scanner::ScanOptions::default();
+                let options = chystik_core::scanner::ScanOptions {
+                    exclude: exclusions,
+                    ..chystik_core::scanner::ScanOptions::default()
+                };
                 let result = chystik_core::scanner::scan_many(
                     &roots,
                     &options,
@@ -610,6 +623,35 @@ impl ChystikApp {
 
     // -- modals ---------------------------------------------------------------
 
+    /// Add a never-touch path, persist it and drop any finding it covers.
+    pub(crate) fn exclude_path(&mut self, path: PathBuf) {
+        self.exclusions.push(path);
+        self.exclusions = crate::exclusions::normalise(std::mem::take(&mut self.exclusions));
+        crate::exclusions::save(&self.exclusions);
+        self.drop_excluded_findings();
+    }
+
+    pub(crate) fn unexclude(&mut self, path: &Path) {
+        self.exclusions.retain(|p| p != path);
+        crate::exclusions::save(&self.exclusions);
+    }
+
+    /// Hide anything the current exclusions cover, without rescanning.
+    fn drop_excluded_findings(&mut self) {
+        let excluded: Vec<usize> = self
+            .findings
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| crate::exclusions::is_excluded(&f.path, &self.exclusions))
+            .map(|(i, _)| i)
+            .collect();
+        for i in excluded {
+            self.deleted.insert(i);
+            self.selected.remove(&i);
+        }
+        self.view_stamp = None;
+    }
+
     pub(crate) fn execute_trash(&mut self, indices: Vec<usize>) {
         let mut freed = 0u64;
         let mut moved = 0usize;
@@ -622,6 +664,19 @@ impl ChystikApp {
             };
             let path = finding.path.clone();
             let size = finding.size_bytes;
+
+            // Advisory findings name system space Chystik cannot reclaim.
+            // They are unselectable in the UI; this is the backstop.
+            if !finding.is_actionable() {
+                skipped += 1;
+                continue;
+            }
+            // Enforced a second time here: an exclusion added after the scan
+            // must still hold for findings already on screen.
+            if crate::exclusions::is_excluded(&path, &self.exclusions) {
+                skipped += 1;
+                continue;
+            }
 
             // Safety guard FIRST — refuse and log anything it rejects.
             // Candidates must live under a configured target; that owning

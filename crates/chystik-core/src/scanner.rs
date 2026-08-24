@@ -38,6 +38,14 @@ pub struct ScanOptions {
     /// directories are still PRUNED, so the one-finding-per-subtree
     /// invariant holds either way.
     pub min_finding_bytes: u64,
+    /// Paths the user has marked as never-touch. Pruned during the walk, so
+    /// an excluded tree is never classified, never reported and therefore
+    /// never selectable.
+    pub exclude: Vec<PathBuf>,
+    /// Append advisory findings for system locations the guard refuses.
+    /// These are reported with the command that reclaims them and are never
+    /// deletable by Chystik itself.
+    pub include_advisories: bool,
 }
 
 impl Default for ScanOptions {
@@ -58,6 +66,8 @@ impl Default for ScanOptions {
             ],
             skip_unscannable_mounts: true,
             min_finding_bytes: 1024 * 1024,
+            exclude: Vec::new(),
+            include_advisories: true,
         }
     }
 }
@@ -102,6 +112,11 @@ pub fn scan_many(
             }
         }
     }
+    if options.include_advisories {
+        // Appended once for the whole run, not per root: these are absolute
+        // system locations, unrelated to what the user chose to scan.
+        all.extend(crate::advisories::probe());
+    }
     let _ = tx.send(ScanProgress::Finished {
         findings: all.clone(),
     });
@@ -137,6 +152,12 @@ fn scan_root(
                 .map(|m| m.to_string_lossy().into_owned()),
         );
     }
+    skip.extend(
+        options
+            .exclude
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned()),
+    );
     // Never prune the scan root or one of its ancestors — that would
     // silently prune the entire walk. Scanning `/var` explicitly stays
     // possible even though `/var` is skipped during a `/` scan.
@@ -147,7 +168,7 @@ fn scan_root(
     let walker = WalkDir::new(root)
         .follow_links(options.follow_symlinks)
         .skip_hidden(false)
-        .process_read_dir(move |_depth, _path, _state, children| {
+        .process_read_dir(move |_depth, parent, _state, children| {
             // Checked here, not only in the consuming loop below: the
             // parallel walk keeps producing work even while the consumer
             // is blocked, so this is what makes Cancel take effect at once.
@@ -157,6 +178,60 @@ fn scan_root(
                 }
                 return;
             }
+
+            // A group-ruled directory belongs to that rule entirely: its
+            // children are ordered here, the newest few are spared, and the
+            // rest are reported individually. Nothing below is descended
+            // into, and the per-path rules never see these children.
+            //
+            // Files count as well as directories — `~/.local/share/claude/
+            // versions` holds one 300 MB executable per build, and a
+            // directory-only pass found nothing there at all.
+            if let Some(rule) = rules::classify_group(parent) {
+                let mut candidates: Vec<(PathBuf, std::time::SystemTime, u64)> = children
+                    .iter()
+                    .flatten()
+                    .filter(|e| !e.file_type().is_symlink())
+                    .filter_map(|e| {
+                        let path = e.path();
+                        let meta = std::fs::symlink_metadata(&path).ok()?;
+                        let mtime = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
+                        Some((path, mtime, meta.len()))
+                    })
+                    .collect();
+                // Newest first: each entry is written once, when its version
+                // is fetched, so mtime is a faithful order here.
+                candidates.sort_by_key(|(_, mtime, _)| std::cmp::Reverse(*mtime));
+
+                for entry in children.iter_mut().flatten() {
+                    entry.read_children_path = None;
+                }
+
+                for (path, _, _) in candidates.into_iter().skip(rule.keep) {
+                    let n = walker_dirs.fetch_add(1, Ordering::Relaxed) + 1;
+                    if n.is_multiple_of(1000) {
+                        let _ = walker_tx.send(ScanProgress::DirectoriesScanned { count: n });
+                    }
+                    let (size_bytes, last_used) = entry_stats(&path, &walker_cancel);
+                    if size_bytes < min_bytes {
+                        continue;
+                    }
+                    let finding = Finding {
+                        path: path.clone(),
+                        category: rule.category,
+                        severity: rule.severity,
+                        size_bytes,
+                        last_used,
+                        mount: crate::disks::mount_of_in(&path, &mounts),
+                        note: rule.note.to_owned(),
+                        advice: None,
+                    };
+                    let _ = walker_tx.send(ScanProgress::FindingFound(Box::new(finding.clone())));
+                    walker_found.lock().unwrap().push(finding);
+                }
+                return;
+            }
+
             for entry in children.iter_mut().flatten() {
                 if entry.depth == 0 || entry.file_type().is_symlink() || !entry.file_type().is_dir()
                 {
@@ -190,6 +265,7 @@ fn scan_root(
                         last_used,
                         mount: crate::disks::mount_of_in(&path, &mounts),
                         note: m.note,
+                        advice: None,
                     };
                     let _ = walker_tx.send(ScanProgress::FindingFound(Box::new(finding.clone())));
                     walker_found.lock().unwrap().push(finding);
@@ -214,6 +290,20 @@ fn scan_root(
         .map_err(|_| ChystikError::Io(std::io::Error::other("scanner lock poisoned")))?
         .clone();
     Ok(findings)
+}
+
+/// Size and mtime of one entry, whether it is a file or a whole subtree.
+fn entry_stats(path: &Path, cancel: &AtomicBool) -> (u64, Option<DateTime<Utc>>) {
+    use std::os::unix::fs::MetadataExt;
+
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return (0, None);
+    };
+    if meta.is_dir() {
+        return dir_stats(path, cancel);
+    }
+    let last_used = meta.modified().ok().map(DateTime::<Utc>::from);
+    (meta.blocks() * 512, last_used)
 }
 
 /// Sum of allocated blocks and max mtime over regular files in a subtree.
@@ -262,6 +352,9 @@ mod tests {
     fn test_options() -> ScanOptions {
         ScanOptions {
             min_finding_bytes: 0,
+            // Advisories probe real system paths; a walk test must not
+            // depend on what this machine happens to have installed.
+            include_advisories: false,
             ..ScanOptions::default()
         }
     }
@@ -401,11 +494,109 @@ mod tests {
         );
     }
 
+    /// A versioned store must lose its old entries and keep the newest.
+    #[test]
+    fn group_rules_spare_the_newest_and_report_the_rest() {
+        use std::time::{Duration, SystemTime};
+
+        let _env = crate::rules::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let home = tempfile::tempdir().unwrap();
+        std::env::set_var("CHYSTIK_TEST_HOME", home.path());
+
+        // Entries here are FILES on a real machine, not directories: one
+        // executable per build. A directory-only pass found nothing.
+        let versions = home.path().join(".local/share/claude/versions");
+        std::fs::create_dir_all(&versions).unwrap();
+        let now = SystemTime::now();
+        for (name, age_days) in [("2.1.237", 30u64), ("2.1.241", 5), ("2.1.242", 0)] {
+            let file = versions.join(name);
+            std::fs::write(&file, vec![0u8; 4096]).unwrap();
+            let when = now - Duration::from_secs(age_days * 86_400);
+            filetime_set(&file, when);
+        }
+
+        let (tx, _rx) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let findings = scan(home.path(), &test_options(), tx, &cancel).expect("scan ok");
+        std::env::remove_var("CHYSTIK_TEST_HOME");
+
+        let names: Vec<String> = findings
+            .iter()
+            .filter(|f| f.path.starts_with(&versions))
+            .filter_map(|f| f.path.file_name()?.to_str().map(str::to_owned))
+            .collect();
+        assert!(
+            !names.contains(&"2.1.242".to_string()),
+            "the newest build must be spared, got {names:?}"
+        );
+        assert_eq!(names.len(), 2, "both older builds reported, got {names:?}");
+
+        // The parent itself is never offered: deleting it would take the
+        // running version with it.
+        assert!(
+            !findings.iter().any(|f| f.path == versions),
+            "the store directory itself must never be a finding"
+        );
+    }
+
+    /// Set an entry's mtime without pulling in a crate for it.
+    fn filetime_set(path: &std::path::Path, when: std::time::SystemTime) {
+        let secs = when
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        let times = [
+            libc::timespec {
+                tv_sec: secs,
+                tv_nsec: 0,
+            },
+            libc::timespec {
+                tv_sec: secs,
+                tv_nsec: 0,
+            },
+        ];
+        let c_path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
+        // SAFETY: c_path is NUL-terminated and `times` is a valid 2-element array.
+        unsafe {
+            libc::utimensat(libc::AT_FDCWD, c_path.as_ptr(), times.as_ptr(), 0);
+        }
+    }
+
+    #[test]
+    fn excluded_paths_are_never_reported() {
+        let root = tempfile::tempdir().unwrap();
+        let project = seed_project(root.path());
+        let options = ScanOptions {
+            exclude: vec![project.clone()],
+            ..test_options()
+        };
+        let (tx, _rx) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let findings = scan(root.path(), &options, tx, &cancel).expect("scan ok");
+        assert!(
+            findings.iter().all(|f| !f.path.starts_with(&project)),
+            "an excluded tree must not appear at all: {findings:?}"
+        );
+
+        // Without the exclusion the same tree is found, so the test is
+        // proving the exclusion and not an empty fixture.
+        let (tx2, _rx2) = mpsc::channel();
+        let baseline = scan(root.path(), &test_options(), tx2, &cancel).expect("scan ok");
+        assert!(baseline.iter().any(|f| f.path.starts_with(&project)));
+    }
+
     #[test]
     fn default_options_prune_unscannable_mounts_and_system_dirs() {
         let d = ScanOptions::default();
         assert!(d.skip_unscannable_mounts);
         assert!(d.min_finding_bytes > 0, "a size floor is on by default");
+        assert!(d.include_advisories, "system advice is on by default");
+        assert!(
+            d.exclude.is_empty(),
+            "nothing is excluded until the user says so"
+        );
         for system in ["/usr", "/var", "/opt", "/proc", "/sys", "/dev", "/run"] {
             assert!(
                 d.skip_names.iter().any(|s| s == system),
@@ -422,7 +613,7 @@ mod tests {
         let cancel = Arc::new(AtomicBool::new(false));
         let options = ScanOptions {
             min_finding_bytes: u64::MAX,
-            ..ScanOptions::default()
+            ..test_options()
         };
         let findings = scan(root.path(), &options, tx, &cancel).expect("scan ok");
         assert!(
@@ -442,8 +633,7 @@ mod tests {
         let cancel = Arc::new(AtomicBool::new(false));
         let options = ScanOptions {
             skip_names: vec![root.path().to_string_lossy().into_owned()],
-            min_finding_bytes: 0,
-            ..ScanOptions::default()
+            ..test_options()
         };
         let findings = scan(root.path(), &options, tx, &cancel).expect("scan ok");
         assert!(

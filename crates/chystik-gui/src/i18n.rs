@@ -212,6 +212,18 @@ pub struct Strings {
     pub settings_source: String,
     pub settings_open_link: String,
     pub close: String,
+    // exclusions and advisories
+    pub exclusions_title: String,
+    pub exclusions_hint: String,
+    pub exclusions_add: String,
+    pub exclusions_remove: String,
+    pub exclusions_empty: String,
+    pub exclusions_unreadable: String,
+    pub advice_label: String,
+    pub advice_run: String,
+    pub advice_copy: String,
+    pub advice_copied: String,
+    pub shown_advisory: String,
     // results
     pub trash_done_title: String,
     pub trash_moved: String,

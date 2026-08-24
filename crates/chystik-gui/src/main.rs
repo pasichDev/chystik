@@ -8,6 +8,7 @@
 //! Module layout:
 //! - `app`     — application state, scan lifecycle, deletion, export
 //! - `consent` — the first-run risk acknowledgement and its record on disk
+//! - `exclusions` — paths the user marked never-touch, enforced twice
 //! - `panels`  — the window's regions (command bar, sidebar, table, footer)
 //! - `modals`  — dialogs, including the first-run risk acknowledgement
 //! - `widgets` — small painted pieces shared between panels
@@ -20,6 +21,7 @@
 
 mod app;
 mod consent;
+mod exclusions;
 mod format;
 mod i18n;
 mod modals;

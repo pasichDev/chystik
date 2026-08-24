@@ -67,6 +67,7 @@ mod tests {
             last_used: None,
             mount: None,
             note: String::new(),
+            advice: None,
         }
     }
 
