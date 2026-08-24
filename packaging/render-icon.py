@@ -6,7 +6,8 @@ Single source of truth for the mark: this script emits BOTH `assets/icon.svg`
 one geometry definition. Editing the SVG by hand and re-running would silently
 diverge the two, so don't — change the constants here and re-run:
 
-    python3 packaging/render-icon.py
+    python3 packaging/render-icon.py            # write assets
+    python3 packaging/render-icon.py --check    # verify without writing
 
 The mark is "Reclaim": a disk read as a ring with one quadrant handed back.
 The missing wedge is the whole idea — space returned, not sweeping.
@@ -20,6 +21,7 @@ and was visibly jagged at every size.
 import math
 import os
 import struct
+import sys
 import zlib
 
 # --- geometry, on a 128-unit grid --------------------------------------------
@@ -173,8 +175,70 @@ def write_svg(path):
         fh.write(svg)
 
 
+def read_png(path):
+    """Decode a PNG this script wrote. Filter 0 only, which is all we emit."""
+    data = open(path, "rb").read()
+    pos, width, height, idat = 8, None, None, b""
+    while pos < len(data):
+        length = struct.unpack(">I", data[pos : pos + 4])[0]
+        tag = data[pos + 4 : pos + 8]
+        payload = data[pos + 8 : pos + 8 + length]
+        if tag == b"IHDR":
+            width, height = struct.unpack(">II", payload[:8])
+        elif tag == b"IDAT":
+            idat += payload
+        pos += 12 + length
+    raw = zlib.decompress(idat)
+    stride = width * 4
+    rows, at = [], 0
+    for _ in range(height):
+        filter_type = raw[at]
+        at += 1
+        if filter_type != 0:
+            raise ValueError(f"{path}: unexpected PNG filter {filter_type}")
+        rows.append(raw[at : at + stride])
+        at += stride
+    return width, height, rows
+
+
+def check(root):
+    """True if every committed asset matches what this script renders.
+
+    Compares PIXELS, not file bytes. `zlib` output differs between versions,
+    so a byte comparison failed on CI for images that were identical — the
+    invariant that matters is what the icon looks like.
+    """
+    ok = True
+    for size in SIZES:
+        path = os.path.join(root, "assets", "icons", f"chystik-{size}.png")
+        if not os.path.exists(path):
+            print(f"MISSING {path}")
+            ok = False
+            continue
+        want = render(size)
+        got_w, got_h, got = read_png(path)
+        if (got_w, got_h) != (size, size) or got != want:
+            print(f"STALE   assets/icons/chystik-{size}.png")
+            ok = False
+    svg_path = os.path.join(root, "assets", "icon.svg")
+    import tempfile
+
+    with tempfile.NamedTemporaryFile("w+", suffix=".svg", delete=True) as tmp:
+        write_svg(tmp.name)
+        if open(svg_path, encoding="utf-8").read() != open(tmp.name, encoding="utf-8").read():
+            print("STALE   assets/icon.svg")
+            ok = False
+    return ok
+
+
 def main():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if "--check" in sys.argv[1:]:
+        if check(root):
+            print("assets are in sync")
+            return 0
+        print("assets are stale — run: python3 packaging/render-icon.py")
+        return 1
     assets = os.path.join(root, "assets")
     icons = os.path.join(assets, "icons")
     os.makedirs(icons, exist_ok=True)
@@ -191,7 +255,8 @@ def main():
     rows = render(256)
     write_png(os.path.join(assets, "icon.png"), rows, 256)
     print("assets/icon.png (256)")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

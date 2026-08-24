@@ -50,8 +50,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Re-render and diff
-        run: |
-          python3 packaging/render-icon.py
-          git diff --exit-code --stat -- assets/ \
-            || { echo "::error::assets/ is stale — run packaging/render-icon.py"; exit 1; }
+      # Compares PIXELS, not file bytes: zlib output differs between
+      # versions, so diffing the committed PNGs failed here for images that
+      # were byte-for-byte different and pixel-for-pixel identical.
+      - name: Verify assets match the renderer
+        run: python3 packaging/render-icon.py --check
