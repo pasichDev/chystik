@@ -1,0 +1,15 @@
+# Build output
+/target/
+**/*.rs.bk
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*~
+
+# Scratch and captures
+*.jsonl
+*.xwd
+*.log
+/dist/

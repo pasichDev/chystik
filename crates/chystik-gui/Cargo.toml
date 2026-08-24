@@ -1,0 +1,30 @@
+[package]
+name = "chystik-gui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Chystik — developer disk cleanup GUI"
+default-run = "chystik-gui"
+
+[dependencies]
+chystik-core = { path = "../chystik-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+trash = { workspace = true }
+
+eframe = "0.29"
+egui_extras = { version = "0.29", features = ["all_loaders"] }
+rfd = "0.15"
+# PNG decode for the window icon; `image` is already in the tree via
+# egui_extras's loaders, so this adds no new compilation.
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[[bin]]
+name = "chystik-gui"
+path = "src/main.rs"

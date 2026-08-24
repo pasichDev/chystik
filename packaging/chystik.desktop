@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Chystik
+GenericName=Disk Cleanup
+Comment=Developer disk cleanup: find and trash caches, build artifacts and stale tool data
+Exec=chystik-gui
+Icon=chystik
+Terminal=false
+Categories=Development;Utility;System;
+Keywords=clean;cache;disk;cleanup;trash;
+StartupWMClass=chystik

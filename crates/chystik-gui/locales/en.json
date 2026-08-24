@@ -1,0 +1,182 @@
+{
+  "ui": {
+    "app_name": "Chystik",
+    "scan": "Scan",
+    "scan_hint": "Walk the selected targets and classify what can be reclaimed",
+    "cancel": "Cancel",
+    "cancel_hint": "Stop the scan; results found so far are kept",
+    "export": "Export…",
+    "export_hint": "Write the full findings list to a JSON report",
+    "refresh_disks": "Refresh disks",
+    "refresh_disks_hint": "Re-read the mount table and free-space figures",
+    "targets_hint": "Choose which disks and folders a scan walks",
+    "add_folder": "Add folder…",
+    "add_folder_hint": "Add any directory as an extra scan target",
+    "filter_hint": "Filter paths…  /",
+    "filter_tooltip": "Substring match on the full path. Press / to focus",
+    "no_disks": "No disks detected.",
+    "scanning_dirs": "directories",
+    "found_so_far": "found so far",
+    "press_scan": "Choose what to scan, then press Scan.",
+    "cancelling": "Cancelling…",
+    "scanning_target": "Scanning",
+    "reclaimable_summary": "reclaimable",
+    "cancelled_summary": "Cancelled — {n} items found before stopping",
+    "scanner_died": "Scanner stopped unexpectedly",
+    "scan_failed": "Scan failed to start",
+    "reclaimable": "RECLAIMABLE",
+    "items_in_categories": "{n} items in {c} categories",
+    "all_categories": "All categories",
+    "all_categories_hint": "Show every finding, ungrouped",
+    "nothing_found": "Nothing found yet.",
+    "filter_all": "All",
+    "filter_all_hint": "Show every severity",
+    "filter_safe_hint": "Only what regenerates on its own",
+    "filter_review": "Review",
+    "filter_review_hint": "Only what costs a re-download or a rebuild",
+    "filter_risky_hint": "Only what cannot be recreated automatically",
+    "items_word": "items",
+    "item_word": "item",
+    "everything_found": "Everything found",
+    "everything_found_sub": "Pick a category on the left to work through them one at a time.",
+    "select_safe": "Select {n} safe · {size}",
+    "select_safe_hint": "Tick every non-risky item shown. Risky items are never included",
+    "clear_selection": "Clear {n} selected",
+    "clear_selection_hint": "Untick everything currently shown",
+    "col_path": "Path",
+    "col_size": "Size",
+    "col_risk": "Risk",
+    "col_age": "Last used",
+    "sort_hint": "Click to sort",
+    "risky_locked_hint": "Risky items are excluded from bulk selection — open the row to delete it deliberately",
+    "empty_title": "Nothing scanned yet",
+    "empty_body": "Chystik finds caches, build outputs and downloads you can safely delete.",
+    "empty_filtered_title": "No matches",
+    "empty_filtered_body": "No item matches the current filters.",
+    "scanning_title": "Scanning…",
+    "scanning_body": "Results appear as they are found.",
+    "shown_needs_review": "{n} shown · {size} needs review before deleting",
+    "selected_word": "selected",
+    "clear": "Clear",
+    "clear_hint": "Drop the current selection",
+    "move_to_trash": "Move {size} to Trash",
+    "move_to_trash_idle": "Move to Trash",
+    "move_to_trash_hint": "Nothing is erased: items go to your desktop trash and stay restorable",
+    "disks": "Disks",
+    "disks_hint": "Mounted volumes and how full they are",
+    "confirm_title": "Move to Trash",
+    "confirm_sub": "{n} {items} · {size} · recoverable from your desktop trash",
+    "guard_will_skip": "{n} will be skipped: the safety guard refuses them.",
+    "esc_to_cancel": "Esc to cancel · Enter to confirm",
+    "ok": "OK",
+    "age_today": "today",
+    "age_days": "{n} d",
+    "age_months": "{n} mo",
+    "age_years": "{n} y",
+    "age_unknown": "unknown",
+    "trash_done_title": "Moved to Trash",
+    "trash_moved": "{n} items moved · {size} reclaimed",
+    "trash_skipped": "{n} skipped by the safety guard",
+    "export_done": "Export complete",
+    "export_failed": "Export failed",
+    "settings": "Settings",
+    "settings_hint": "Language, version and project links",
+    "settings_language": "Interface language",
+    "settings_version": "Version",
+    "settings_developer": "Developer",
+    "settings_source": "Source code",
+    "settings_open_link": "Open in browser",
+    "close": "Close",
+    "consent_title": "Before you start",
+    "consent_lead": "Chystik deletes files. Read this once, then it will not ask again.",
+    "consent_p1_title": "Nothing is erased directly",
+    "consent_p1_body": "Everything you select goes to your desktop trash, where you can put it back.",
+    "consent_p2_title": "Every item is rated by what losing it costs",
+    "consent_p2_body": "Safe regenerates on its own. Moderate costs a re-download or a rebuild. Risky cannot be recreated automatically.",
+    "consent_p3_title": "Risky items are never selected in bulk",
+    "consent_p3_body": "You have to tick each one yourself, deliberately.",
+    "consent_p4_title": "Some paths are refused outright",
+    "consent_p4_body": "System directories, .git, .ssh, .gnupg and your settings are rejected by a guard that runs before every deletion.",
+    "consent_p5_title": "The final review is yours",
+    "consent_p5_body": "Chystik shows a full manifest before it deletes anything. Read it — the rules can be wrong about your machine.",
+    "consent_checkbox": "I understand, and I will review the list before confirming a deletion",
+    "consent_continue": "Continue",
+    "consent_quit": "Quit"
+  },
+  "categories": {
+    "build_artifacts": {
+      "label": "Build artifacts",
+      "description": "Compiler and bundler output inside your projects: node_modules, target, dist. Rebuilt by the project's own build command, at the cost of compile time."
+    },
+    "package_caches": {
+      "label": "Package caches",
+      "description": "Downloaded dependencies kept by package managers. Re-fetched automatically on the next install; you only pay bandwidth."
+    },
+    "ide_toolchains": {
+      "label": "IDE & toolchains",
+      "description": "Editor indexes and downloaded SDKs, runtimes and toolchains. Rebuilt or re-downloaded, but a build can fail until it is."
+    },
+    "ai_models": {
+      "label": "AI models",
+      "description": "Local model weights. Often tens of gigabytes, slow to fetch, and sometimes no longer published — treat every one as a deliberate decision."
+    },
+    "browser_system": {
+      "label": "Browser & system",
+      "description": "Browser caches, thumbnails and desktop shader caches. Refilled during normal use with no action from you."
+    },
+    "android_dev": {
+      "label": "Android dev",
+      "description": "Emulator images, SDK system images and superseded Studio copies. Large, and re-downloaded through the SDK manager."
+    },
+    "ai_agents": {
+      "label": "AI agents",
+      "description": "Coding-agent session logs, transcripts and downloaded agent runtimes. Transcripts are conversation history and do not come back."
+    },
+    "containers": {
+      "label": "Containers",
+      "description": "User-level container engine caches and images. Rebuilt or pulled again; named volumes are never targeted."
+    },
+    "installers": {
+      "label": "Installers",
+      "description": "Archives and packages left behind after installation: .deb, AppImage, .vsix. The installed software is unaffected."
+    },
+    "game_launchers": {
+      "label": "Games",
+      "description": "Shader caches, client logs and update payloads from game launchers. Installed games and saves are never targeted."
+    },
+    "media_apps": {
+      "label": "Media",
+      "description": "Render caches and preview proxies from video and audio tools. Regenerated on the next render, which takes time."
+    },
+    "messengers": {
+      "label": "Messengers",
+      "description": "Received-media caches from chat apps. Message history itself is out of scope."
+    },
+    "cloud_sync": {
+      "label": "Cloud sync",
+      "description": "Transfer queues, conflict copies and metadata databases from sync clients. Your synced files are never targeted."
+    },
+    "office_docs": {
+      "label": "Office",
+      "description": "Recovery data, locks and thumbnail caches from office and note apps. Documents themselves are out of scope."
+    },
+    "system_junk": {
+      "label": "System junk",
+      "description": "Crash dumps, stale indexes, orphaned thumbnails and the desktop trash. Regenerated or already discarded."
+    }
+  },
+  "severities": {
+    "safe": {
+      "label": "Safe",
+      "cost": "regenerates automatically"
+    },
+    "moderate": {
+      "label": "Moderate",
+      "cost": "needs a re-download or a rebuild"
+    },
+    "risky": {
+      "label": "Risky",
+      "cost": "cannot be recreated automatically"
+    }
+  }
+}

@@ -1,0 +1,19 @@
+[package]
+name = "chystik-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Scanner, category rules and severity engine for Chystik disk cleanup"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+jwalk = { workspace = true }
+chrono = { workspace = true }
+libc = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+trash = { workspace = true }
