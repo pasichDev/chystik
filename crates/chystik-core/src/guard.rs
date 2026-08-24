@@ -46,11 +46,22 @@ fn is_allowlisted_config_cache(candidate: &Path) -> bool {
         .any(|allowed| rel == *allowed || rel.starts_with(&format!("{allowed}/")))
 }
 
-/// Validate a deletion candidate:
-/// - must exist and be inside the scan root
-/// - must not be a protected prefix or contain protected name components
-/// - must not be a symlink (reject, do not follow)
-/// - scan root itself is never deletable
+/// Validate a deletion candidate.
+///
+/// Refuses anything that is not, physically, a non-symlinked path strictly
+/// inside `scan_root`:
+/// - must exist, and must not itself be a symlink
+/// - no component BELOW the scan root may be a symlink either
+/// - must resolve to a location still inside the resolved scan root
+/// - must not be a protected prefix or contain a protected name, checked on
+///   the resolved path as well as the given one
+/// - the scan root itself is never deletable
+///
+/// The ancestor rules matter as much as the last-component one. Checking
+/// only `symlink_metadata(candidate)` describes the final component and
+/// nothing else: with `cache-link -> important-data`, the path
+/// `<root>/cache-link/sub` lstats a real directory, passes every lexical
+/// test, and deletes `important-data/sub`.
 pub fn check(candidate: &Path, scan_root: &Path) -> Result<(), ChystikError> {
     let refuse = || Err(ChystikError::ProtectedPath(candidate.to_path_buf()));
 
@@ -64,33 +75,82 @@ pub fn check(candidate: &Path, scan_root: &Path) -> Result<(), ChystikError> {
     if candidate == scan_root || !candidate.starts_with(scan_root) {
         return refuse();
     }
-    // System locations: candidate equals a protected prefix or lives directly
-    // under one (relevant when someone scans / or /var).
-    let s = candidate.to_string_lossy();
-    for p in PROTECTED_PREFIXES {
-        if *p == "/" {
-            if s == "/" {
-                return refuse();
-            }
-        } else if s.as_ref() == *p || s.starts_with(&format!("{p}/")) {
+    // Every step from the scan root down to the candidate must be a real
+    // directory, not a link into somewhere else.
+    if has_symlinked_ancestor(candidate, scan_root) {
+        return refuse();
+    }
+    // Where the path actually leads, after the kernel resolves it. A
+    // candidate whose resolved form leaves the resolved root is refused
+    // however innocent it looked lexically.
+    let resolved = std::fs::canonicalize(candidate).ok();
+    if let (Some(resolved), Ok(resolved_root)) = (&resolved, std::fs::canonicalize(scan_root)) {
+        if resolved == &resolved_root || !resolved.starts_with(&resolved_root) {
             return refuse();
+        }
+    }
+
+    for path in [Some(candidate.to_path_buf()), resolved]
+        .into_iter()
+        .flatten()
+    {
+        if is_protected_location(&path, candidate) {
+            return refuse();
+        }
+    }
+    Ok(())
+}
+
+/// True if any component strictly between `scan_root` and `candidate` is a
+/// symlink. Components at or above the scan root are the user's own choice
+/// of target and are covered by the resolved-containment check instead.
+fn has_symlinked_ancestor(candidate: &Path, scan_root: &Path) -> bool {
+    let Ok(relative) = candidate.strip_prefix(scan_root) else {
+        return true; // not inside the root at all
+    };
+    let mut walked = scan_root.to_path_buf();
+    let mut components: Vec<_> = relative.components().collect();
+    components.pop(); // the candidate itself is lstatted by the caller
+    for component in components {
+        walked.push(component);
+        match std::fs::symlink_metadata(&walked) {
+            Ok(meta) if meta.file_type().is_symlink() => return true,
+            Ok(_) => {}
+            Err(_) => return true, // cannot vouch for it, so refuse
+        }
+    }
+    false
+}
+
+/// Protected-prefix and protected-name rules, applied to one path.
+/// `original` is only used to resolve the `.config` allowlist, which is
+/// expressed relative to `$HOME`.
+fn is_protected_location(path: &Path, original: &Path) -> bool {
+    // System locations: equal to a protected prefix or directly under one.
+    let text = path.to_string_lossy();
+    for protected in PROTECTED_PREFIXES {
+        if *protected == "/" {
+            if text == "/" {
+                return true;
+            }
+        } else if text.as_ref() == *protected || text.starts_with(&format!("{protected}/")) {
+            return true;
         }
     }
     // Protected dot-dirs anywhere along the path. `.config` alone has
     // audited cache exceptions; `.git`/`.ssh`/`.gnupg` never do.
-    for component in candidate
-        .components()
-        .filter_map(|c| c.as_os_str().to_str())
-    {
+    for component in path.components().filter_map(|c| c.as_os_str().to_str()) {
         if !PROTECTED_NAMES.contains(&component) {
             continue;
         }
-        if component == ".config" && is_allowlisted_config_cache(candidate) {
+        if component == ".config"
+            && (is_allowlisted_config_cache(path) || is_allowlisted_config_cache(original))
+        {
             continue;
         }
-        return refuse();
+        return true;
     }
-    Ok(())
+    false
 }
 
 /// Return true if the walker should descend into `dir` during scanning
@@ -138,6 +198,60 @@ mod tests {
         let p = root.path().join("proj/.git/hooks");
         std::fs::create_dir_all(&p).unwrap();
         assert!(check(&p, root.path()).is_err());
+    }
+
+    /// A symlinked PARENT inside the scan root.
+    ///
+    /// `symlink_metadata(candidate)` describes only the last component, so
+    /// `<root>/cache-link/sub` lstatted a real directory and passed every
+    /// lexical test while physically pointing at `important-data/sub`.
+    #[test]
+    fn rejects_a_symlinked_parent_inside_the_scan_root() {
+        let root = tempdir().unwrap();
+        let important = root.path().join("important-data");
+        std::fs::create_dir_all(important.join("sub")).unwrap();
+        let link = root.path().join("cache-link");
+        std::os::unix::fs::symlink(&important, &link).unwrap();
+
+        let through_link = link.join("sub");
+        assert!(
+            std::fs::symlink_metadata(&through_link).is_ok(),
+            "fixture must lstat cleanly, or the test proves nothing"
+        );
+        assert!(
+            check(&through_link, root.path()).is_err(),
+            "a symlinked ancestor must be refused"
+        );
+        // The real location is still deletable; only the route through the
+        // link is refused.
+        assert!(check(&important.join("sub"), root.path()).is_ok());
+    }
+
+    /// Deeper nesting, and a link that leaves the scan root entirely.
+    #[test]
+    fn rejects_a_link_that_escapes_the_scan_root() {
+        let outside = tempdir().unwrap();
+        std::fs::create_dir_all(outside.path().join("secrets")).unwrap();
+        let root = tempdir().unwrap();
+        let nested = root.path().join("a/b");
+        std::fs::create_dir_all(&nested).unwrap();
+        let escape = nested.join("out");
+        std::os::unix::fs::symlink(outside.path(), &escape).unwrap();
+
+        assert!(check(&escape.join("secrets"), root.path()).is_err());
+        assert!(check(&escape, root.path()).is_err());
+    }
+
+    /// A protected name reached THROUGH a link must still be refused: the
+    /// lexical path says nothing about where it lands.
+    #[test]
+    fn protected_names_are_checked_on_the_resolved_path_too() {
+        let root = tempdir().unwrap();
+        let real = root.path().join("project/.git");
+        std::fs::create_dir_all(&real).unwrap();
+        let link = root.path().join("innocent");
+        std::os::unix::fs::symlink(root.path().join("project"), &link).unwrap();
+        assert!(check(&link.join(".git"), root.path()).is_err());
     }
 
     #[test]
