@@ -293,13 +293,10 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn macos_policy_is_scan_only_and_protects_system_paths() {
+    fn macos_policy_uses_native_trash_and_protects_system_paths() {
         let host = current();
         assert_eq!(host.kind(), PlatformKind::MacOS);
-        assert!(matches!(
-            host.cleanup_support(),
-            CleanupSupport::ScanOnly { .. }
-        ));
+        assert_eq!(host.cleanup_support(), CleanupSupport::NativeTrash);
         assert!(host.is_protected_system_path(Path::new("/System/Library")));
     }
 

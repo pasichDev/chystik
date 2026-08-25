@@ -78,7 +78,7 @@ struct Trace {
     cost: &'static str,
 }
 
-const TRACES: &[Trace] = &[
+const LINUX_TRACES: &[Trace] = &[
     Trace {
         rel: ".bash_history",
         kind: TraceKind::ShellHistory,
@@ -186,18 +186,113 @@ const TRACES: &[Trace] = &[
     },
 ];
 
+/// macOS keeps the same shell histories in `$HOME`, but applications use
+/// `~/Library` rather than the XDG layout used by Linux. Keep this list
+/// explicit: privacy cleanup must never guess at an application directory.
+const MACOS_TRACES: &[Trace] = &[
+    Trace {
+        rel: ".bash_history",
+        kind: TraceKind::ShellHistory,
+        severity: Severity::Moderate,
+        reveals: "every command you have run, including secrets pasted into one by accident",
+        cost: "history search and recall start from nothing",
+    },
+    Trace {
+        rel: ".zsh_history",
+        kind: TraceKind::ShellHistory,
+        severity: Severity::Moderate,
+        reveals: "every command you have run, including secrets pasted into one by accident",
+        cost: "history search and recall start from nothing",
+    },
+    Trace {
+        rel: ".local/share/fish/fish_history",
+        kind: TraceKind::ShellHistory,
+        severity: Severity::Moderate,
+        reveals: "every command you have run in fish",
+        cost: "history search and recall start from nothing",
+    },
+    Trace {
+        rel: ".python_history",
+        kind: TraceKind::ShellHistory,
+        severity: Severity::Safe,
+        reveals: "everything typed into an interactive Python session",
+        cost: "REPL history is gone; nothing else changes",
+    },
+    Trace {
+        rel: ".lesshst",
+        kind: TraceKind::ShellHistory,
+        severity: Severity::Safe,
+        reveals: "search terms you used inside less, and the files you paged through",
+        cost: "nothing; less rebuilds it as you go",
+    },
+    Trace {
+        rel: "Library/Safari/History.db",
+        kind: TraceKind::Browsing,
+        severity: Severity::Risky,
+        reveals: "every Safari page visited, with timestamps, downloads and search terms",
+        cost: "Safari address-bar suggestions and history search are gone permanently",
+    },
+    Trace {
+        rel: "Library/Application Support/Google/Chrome/Default/History",
+        kind: TraceKind::Browsing,
+        severity: Severity::Risky,
+        reveals: "every Chrome page visited, with timestamps, downloads and search terms",
+        cost: "Chrome address-bar suggestions and history search are gone permanently",
+    },
+    Trace {
+        rel: "Library/Application Support/Google/Chrome/Default/Cookies",
+        kind: TraceKind::Browsing,
+        severity: Severity::Risky,
+        reveals: "which Chrome sites you are signed in to, and the trackers that follow you",
+        cost: "Chrome signs you out of the sites whose cookies are cleared",
+    },
+    Trace {
+        rel: "Library/Application Support/Chromium/Default/History",
+        kind: TraceKind::Browsing,
+        severity: Severity::Risky,
+        reveals: "every Chromium page visited, with timestamps, downloads and search terms",
+        cost: "Chromium address-bar suggestions and history search are gone permanently",
+    },
+    Trace {
+        rel: "Library/Application Support/Chromium/Default/Cookies",
+        kind: TraceKind::Browsing,
+        severity: Severity::Risky,
+        reveals: "which Chromium sites you are signed in to, and the trackers that follow you",
+        cost: "Chromium signs you out of the sites whose cookies are cleared",
+    },
+    Trace {
+        rel: ".viminfo",
+        kind: TraceKind::ToolHistory,
+        severity: Severity::Safe,
+        reveals: "files edited in vim, search patterns, and clipboard contents",
+        cost: "vim forgets your marks and registers",
+    },
+    Trace {
+        rel: "Library/Application Support/nvim/shada/main.shada",
+        kind: TraceKind::ToolHistory,
+        severity: Severity::Safe,
+        reveals: "files edited in Neovim, search patterns, and clipboard contents",
+        cost: "Neovim forgets its marks and registers",
+    },
+];
+
+fn trace_table() -> &'static [Trace] {
+    match crate::platform::current().kind() {
+        PlatformKind::Linux => LINUX_TRACES,
+        PlatformKind::MacOS => MACOS_TRACES,
+        PlatformKind::Windows | PlatformKind::Unsupported => &[],
+    }
+}
+
 /// Every trace that exists on this machine, largest first.
 ///
 /// Absent paths are simply not reported: a machine with no Chrome never
 /// sees a Chrome row.
 pub fn probe() -> Vec<PrivacyItem> {
-    if crate::platform::current().kind() != PlatformKind::Linux {
-        return Vec::new();
-    }
     let Some(home) = home_root() else {
         return Vec::new();
     };
-    let mut items: Vec<PrivacyItem> = TRACES
+    let mut items: Vec<PrivacyItem> = trace_table()
         .iter()
         .filter_map(|trace| probe_one(&home, trace))
         .collect();
@@ -267,7 +362,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn every_trace_explains_itself() {
-        for trace in TRACES {
+        for trace in trace_table() {
             assert!(
                 trace.reveals.len() > 25,
                 "{}: `reveals` is the whole product; it cannot be a label",
@@ -287,7 +382,7 @@ mod tests {
     /// it genuinely costs nothing.
     #[test]
     fn browsing_and_credentials_are_never_marked_safe() {
-        for trace in TRACES {
+        for trace in trace_table() {
             if matches!(trace.kind, TraceKind::Browsing) || trace.rel.contains("keyrings") {
                 assert_ne!(
                     trace.severity,
@@ -324,11 +419,34 @@ mod tests {
         std::fs::write(&real, "secrets").unwrap();
         std::os::unix::fs::symlink(&real, home.path().join(".bash_history")).unwrap();
 
-        let trace = &TRACES[0];
+        let trace = trace_table()
+            .iter()
+            .find(|trace| trace.rel == ".bash_history")
+            .expect("every supported Unix host has bash history in the table");
         assert_eq!(trace.rel, ".bash_history");
         assert!(
             probe_one(home.path(), trace).is_none(),
             "clearing a link would act on its target"
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_probe_uses_library_paths() {
+        let _env = crate::rules::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let home = tempfile::tempdir().unwrap();
+        let history = home.path().join("Library/Safari/History.db");
+        std::fs::create_dir_all(history.parent().unwrap()).unwrap();
+        std::fs::write(&history, "history").unwrap();
+        std::env::set_var("CHYSTIK_TEST_HOME", home.path());
+
+        let items = probe();
+
+        std::env::set_var("CHYSTIK_TEST_HOME", "/nonexistent-chystik-test-home");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].path, history);
+        assert_eq!(items[0].kind, TraceKind::Browsing);
     }
 }

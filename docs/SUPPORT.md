@@ -8,7 +8,7 @@ roots, allocated-byte accounting and cleanup capability. No frontend reads
 | Platform | Scan | Cleanup | Artifact / evidence |
 |---|---|---|---|
 | Linux | Supported | Supported through native desktop trash | Linux CI runs formatting, clippy, unit tests, deletion integration tests and release build. |
-| macOS | Preview | Disabled (scan-only) | Native `cargo check --all-targets` on macOS CI. No signed/notarized app artifact yet. |
+| macOS | Preview | Supported through native Trash | Native `cargo check --all-targets` on macOS CI; cleanup uses macOS's Trash API. No signed/notarized app artifact yet. |
 | Windows | Preview | Disabled (scan-only) | Native `cargo check --all-targets` on Windows CI. No signed installer yet. |
 | Other | Unsupported | Disabled (scan-only) | Builds retain a conservative fallback adapter. |
 
@@ -21,11 +21,11 @@ There is no direct-delete fallback. On a scan-only platform `clean` reports
 each requested item as unavailable and never calls a remover; the GUI disables
 the same action.
 
-Linux is the only currently verified implementation. Its existing guard,
-identity re-check and trash flow remain covered by Unix integration tests.
-macOS and Windows need native Trash/Recycle Bin adapters plus tests that cover
-links, reparse points, junctions, permission failures and recovery visibility
-before this row can change to supported.
+Linux and macOS use native recovery mechanisms. Their existing guard and
+identity re-check remain shared across platforms; macOS cleanup delegates to
+the system Trash API. Windows still needs a Recycle Bin adapter plus tests
+that cover links, reparse points, junctions, permission failures and recovery
+visibility before its row can change to supported.
 
 ## Extension boundary
 

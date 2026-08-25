@@ -37,7 +37,7 @@ pub trait Remover: Send + Sync {
     }
 }
 
-/// The verified Linux desktop trash implementation.
+/// The verified desktop trash implementation.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SystemTrash;
 
@@ -46,11 +46,30 @@ impl Remover for SystemTrash {
         if let CleanupSupport::ScanOnly { reason } = platform::current().cleanup_support() {
             return Err(ChystikError::Io(std::io::Error::other(reason)));
         }
-        trash::delete(path).map_err(|e| ChystikError::Io(std::io::Error::other(e.to_string())))
+        move_to_trash(path).map_err(|e| ChystikError::Io(std::io::Error::other(e.to_string())))
     }
 
     fn describe(&self) -> &'static str {
         "trash"
+    }
+}
+
+fn move_to_trash(path: &Path) -> Result<(), trash::Error> {
+    #[cfg(target_os = "macos")]
+    {
+        // NSFileManager uses the native Trash API without requiring Finder
+        // automation permission. It still leaves the item recoverable in
+        // Trash, which is the contract exposed by this application.
+        use trash::macos::{DeleteMethod, TrashContextExtMacos};
+
+        let mut context = trash::TrashContext::default();
+        context.set_delete_method(DeleteMethod::NsFileManager);
+        context.delete(path)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        trash::delete(path)
     }
 }
 
@@ -330,7 +349,7 @@ mod tests {
         ));
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     #[test]
     fn current_scan_only_platform_never_hands_a_path_to_the_remover() {
         let root = tempdir().unwrap();
@@ -350,7 +369,7 @@ mod tests {
         ));
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     #[test]
     fn system_trash_itself_refuses_on_a_scan_only_platform() {
         let CleanupSupport::ScanOnly { reason } = platform::current().cleanup_support() else {
@@ -360,6 +379,21 @@ mod tests {
             .remove(Path::new("this path never needs to exist"))
             .expect_err("scan-only platforms must refuse before calling the trash backend");
         assert_eq!(error.to_string(), format!("io error: {reason}"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn system_trash_moves_a_fixture_through_macos_native_trash() {
+        let root = tempdir().unwrap();
+        let target = root.path().join("chystik-macos-native-trash-smoke");
+        std::fs::write(&target, "safe smoke-test fixture").unwrap();
+
+        let outcome = clean(&[item(&target, root.path(), 25)], &SystemTrash);
+
+        assert_eq!(outcome.removed, vec![target.clone()]);
+        assert_eq!(outcome.freed_bytes, 25);
+        assert!(outcome.skipped.is_empty());
+        assert!(!target.exists());
     }
 
     /// The whole point of the abstraction: a refused path must never reach

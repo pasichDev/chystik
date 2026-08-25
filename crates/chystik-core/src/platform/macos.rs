@@ -99,9 +99,7 @@ impl Adapter for MacOS {
     }
 
     fn cleanup_support(&self) -> CleanupSupport {
-        CleanupSupport::ScanOnly {
-            reason: "macOS cleanup is disabled until native Trash and link-safety integration tests run on macOS",
-        }
+        CleanupSupport::NativeTrash
     }
 }
 
