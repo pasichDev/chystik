@@ -1,4 +1,4 @@
-//! Physical drives and their partitions, read from `sysfs`.
+//! Physical drives and their partitions.
 //!
 //! [`disks::mount_table`](crate::disks::mount_table) answers "what is
 //! mounted"; this answers "what is attached". The difference is the whole
@@ -6,16 +6,20 @@
 //! contributes nothing to `df` and is exactly the capacity a user cannot
 //! account for.
 //!
-//! Everything comes from `/sys/block`, so there is no dependency on
-//! `lsblk`, `udev` or root. Sizes are in 512-byte sectors regardless of the
-//! device's logical block size — that is what the kernel documents for
-//! `size`, and getting it wrong silently multiplies every number.
+//! Linux reads `/sys/block` directly, without a dependency on `lsblk`, `udev`
+//! or root. Other platforms use their platform adapter's mounted-volume
+//! inventory until a native attached-device adapter has been safety-tested.
 
-use std::path::{Path, PathBuf};
+#[cfg(target_os = "linux")]
+use std::path::Path;
+use std::path::PathBuf;
 
+#[cfg(target_os = "linux")]
 use crate::disks;
 
+#[cfg(target_os = "linux")]
 const SYS_BLOCK: &str = "/sys/block";
+#[cfg(target_os = "linux")]
 const SECTOR: u64 = 512;
 
 /// How a drive stores things. Shown as a badge, and it changes advice: a
@@ -126,6 +130,7 @@ impl Drive {
 /// Loop, RAM and device-mapper devices are excluded: `loop0` is a mounted
 /// snap, not a disk the user can act on, and listing sixty of them buries
 /// the three that matter.
+#[cfg(target_os = "linux")]
 pub fn drives() -> Vec<Drive> {
     let mounts = MountIndex::read();
     let Ok(entries) = std::fs::read_dir(SYS_BLOCK) else {
@@ -147,6 +152,52 @@ pub fn drives() -> Vec<Drive> {
     drives
 }
 
+/// macOS and Windows do not expose Linux's `/sys/block` contract. Returning
+/// the mounted volumes still makes the Disks view useful and honest: it can
+/// show capacity and usage, while leaving unmounted physical partitions for
+/// a future native device adapter rather than manufacturing device data.
+#[cfg(not(target_os = "linux"))]
+pub fn drives() -> Vec<Drive> {
+    let mut drives: Vec<Drive> = crate::platform::current()
+        .storage_volumes()
+        .into_iter()
+        .filter(|volume| volume.total_bytes > 0)
+        .map(|volume| {
+            let name = volume
+                .mount_point
+                .file_name()
+                .and_then(|name| name.to_str())
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned)
+                // A Windows volume root (`C:\\`) and Unix root (`/`) have no
+                // final filename component. Show the real mount label rather
+                // than the misleading generic word "root".
+                .unwrap_or_else(|| volume.mount_point.display().to_string());
+            let mount = PartitionMount {
+                mount_point: volume.mount_point,
+                fs_type: volume.fs_type,
+                total_bytes: volume.total_bytes,
+                free_bytes: volume.free_bytes,
+            };
+            let partition = Partition {
+                name: name.clone(),
+                size_bytes: mount.total_bytes,
+                mount: Some(mount.clone()),
+                usage: PartitionUse::Filesystem(mount),
+            };
+            Drive {
+                name,
+                model: "Mounted volume".into(),
+                size_bytes: partition.size_bytes,
+                kind: DriveKind::Unknown,
+                partitions: vec![partition],
+            }
+        })
+        .collect();
+    drives.sort_by_key(|drive| std::cmp::Reverse(drive.size_bytes));
+    drives
+}
+
 /// Total attached capacity across every drive.
 pub fn total_attached_bytes(drives: &[Drive]) -> u64 {
     drives.iter().map(|d| d.size_bytes).sum()
@@ -157,11 +208,13 @@ pub fn total_unmounted_bytes(drives: &[Drive]) -> u64 {
     drives.iter().map(Drive::unmounted_bytes).sum()
 }
 
+#[cfg(target_os = "linux")]
 fn is_virtual(name: &str) -> bool {
     const PREFIXES: &[&str] = &["loop", "ram", "zram", "dm-", "md", "sr", "fd"];
     PREFIXES.iter().any(|p| name.starts_with(p))
 }
 
+#[cfg(target_os = "linux")]
 fn read_drive(dir: &Path, name: &str, mounts: &MountIndex) -> Option<Drive> {
     let size_bytes = read_sectors(&dir.join("size"))?;
     let removable = read_string(&dir.join("removable")).as_deref() == Some("1");
@@ -234,11 +287,13 @@ fn read_drive(dir: &Path, name: &str, mounts: &MountIndex) -> Option<Drive> {
 /// unfiltered truth, and swap needs `/proc/swaps` — an active swap
 /// partition appears in no mount table at all and was being counted as
 /// free capacity.
+#[cfg(target_os = "linux")]
 struct MountIndex {
     filesystems: Vec<(String, PartitionMount)>,
     swap_devices: Vec<String>,
 }
 
+#[cfg(target_os = "linux")]
 impl MountIndex {
     fn read() -> Self {
         let filesystems = std::fs::read_to_string("/proc/self/mounts")
@@ -292,6 +347,7 @@ impl MountIndex {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn read_string(path: &Path) -> Option<String> {
     let text = std::fs::read_to_string(path).ok()?;
     let trimmed = text.trim();
@@ -300,6 +356,7 @@ fn read_string(path: &Path) -> Option<String> {
 
 /// sysfs `size` is always in 512-byte sectors, whatever the device's
 /// logical block size happens to be.
+#[cfg(target_os = "linux")]
 fn read_sectors(path: &Path) -> Option<u64> {
     read_string(path)?.parse::<u64>().ok().map(|s| s * SECTOR)
 }
@@ -308,6 +365,7 @@ fn read_sectors(path: &Path) -> Option<u64> {
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn virtual_devices_are_excluded() {
         for name in ["loop0", "loop42", "ram3", "zram0", "dm-1", "sr0"] {
@@ -426,5 +484,50 @@ mod tests {
             total_attached_bytes(&drives),
             drives.iter().map(|d| d.size_bytes).sum::<u64>()
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_disks_include_the_mounted_root_volume() {
+        let drives = drives();
+        let root = drives
+            .iter()
+            .flat_map(|drive| drive.partitions.iter())
+            .find(|partition| {
+                matches!(
+                    &partition.usage,
+                    PartitionUse::Filesystem(mount) if mount.mount_point == std::path::Path::new("/")
+                )
+            })
+            .expect("the macOS mounted-volume fallback must expose root");
+
+        assert!(root.size_bytes > 0);
+        assert!(root
+            .mount
+            .as_ref()
+            .is_some_and(|mount| mount.free_bytes <= mount.total_bytes));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_disks_include_a_real_logical_volume_with_capacity() {
+        let drives = drives();
+        let drive = drives
+            .iter()
+            .find(|drive| {
+                drive.partitions.iter().any(|partition| {
+                    matches!(
+                        &partition.usage,
+                        PartitionUse::Filesystem(mount) if mount.mount_point.is_absolute()
+                    )
+                })
+            })
+            .expect("Windows must expose at least its fixed system volume");
+        assert!(drive.size_bytes > 0);
+        assert_ne!(drive.name, "root", "show the Windows volume label");
+        assert!(drive.partitions.iter().all(|partition| partition
+            .mount
+            .as_ref()
+            .is_some_and(|mount| mount.free_bytes <= mount.total_bytes)));
     }
 }

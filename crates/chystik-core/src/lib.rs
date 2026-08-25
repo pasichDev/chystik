@@ -16,6 +16,7 @@ pub mod cleaner;
 pub mod disks;
 pub mod guard;
 pub mod model;
+pub mod platform;
 pub mod privacy;
 pub mod report;
 pub mod rules;

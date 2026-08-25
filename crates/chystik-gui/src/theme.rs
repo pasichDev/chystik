@@ -280,6 +280,27 @@ pub(crate) fn app_icon() -> Option<egui::IconData> {
         .inspect_err(|e| eprintln!("[chystik] icon decode failed: {e}"))
         .ok()?
         .into_rgba8();
+
+    // macOS's Dock compares the opaque canvas, not just the mark's visual
+    // weight. Our rounded square fills the source asset more tightly than
+    // most native app icons, so it reads slightly oversized beside them.
+    // Keep the shared asset unchanged and add platform-specific transparent
+    // breathing room only to the native window/Dock icon.
+    #[cfg(target_os = "macos")]
+    let image = {
+        let (width, height) = image.dimensions();
+        let inset = width.min(height) / 16;
+        let resized = image::imageops::resize(
+            &image,
+            width.saturating_sub(inset * 2),
+            height.saturating_sub(inset * 2),
+            image::imageops::FilterType::Lanczos3,
+        );
+        let mut padded = image::RgbaImage::from_pixel(width, height, image::Rgba([0, 0, 0, 0]));
+        image::imageops::overlay(&mut padded, &resized, i64::from(inset), i64::from(inset));
+        padded
+    };
+
     let (width, height) = image.dimensions();
     Some(egui::IconData {
         width,

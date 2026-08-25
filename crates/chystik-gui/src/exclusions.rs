@@ -9,7 +9,7 @@
 //! are never classified or shown, and `filter` runs again on the deletion
 //! path in case a finding predates the exclusion.
 //!
-//! Stored beside the consent record in `$XDG_CONFIG_HOME/chystik/`.
+//! Stored beside the consent record in the platform-owned app config directory.
 
 use std::path::{Path, PathBuf};
 
@@ -20,21 +20,18 @@ pub(crate) struct Exclusions {
     pub paths: Vec<PathBuf>,
 }
 
-fn exclusions_path() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(base.join("chystik").join("exclusions.json"))
+fn exclusions_path() -> PathBuf {
+    chystik_core::platform::current()
+        .app_paths()
+        .config_dir
+        .join("exclusions.json")
 }
 
 /// Load the list. Any read or parse failure yields an empty list: an
 /// unreadable file must not silently un-exclude anything, so the caller is
 /// told through the returned `bool`.
 pub(crate) fn load() -> (Vec<PathBuf>, bool) {
-    let Some(path) = exclusions_path() else {
-        return (Vec::new(), true);
-    };
+    let path = exclusions_path();
     match std::fs::read_to_string(&path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => (Vec::new(), true),
         Err(e) => {
@@ -52,9 +49,7 @@ pub(crate) fn load() -> (Vec<PathBuf>, bool) {
 }
 
 pub(crate) fn save(paths: &[PathBuf]) {
-    let Some(path) = exclusions_path() else {
-        return;
-    };
+    let path = exclusions_path();
     let record = Exclusions {
         paths: paths.to_vec(),
     };
@@ -138,5 +133,16 @@ mod tests {
         };
         let json = serde_json::to_string(&record).unwrap();
         assert_eq!(serde_json::from_str::<Exclusions>(&json).unwrap(), record);
+    }
+
+    #[test]
+    fn exclusions_path_uses_the_core_platform_config_directory() {
+        assert_eq!(
+            exclusions_path(),
+            chystik_core::platform::current()
+                .app_paths()
+                .config_dir
+                .join("exclusions.json")
+        );
     }
 }

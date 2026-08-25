@@ -1,0 +1,448 @@
+//! The host seam for filesystem behavior.
+//!
+//! Scanner, guard, cleaner and frontends use [`Platform`] rather than asking
+//! Linux, macOS or Windows questions themselves. This keeps the rule engine
+//! and its future CLI/classifier consumers deterministic and portable while
+//! making the safety-sensitive parts vary in one place.
+
+use std::fs::Metadata;
+use std::path::{Path, PathBuf};
+
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+mod unsupported;
+#[cfg(target_os = "windows")]
+mod windows;
+
+/// The host family Chystik is running on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlatformKind {
+    Linux,
+    MacOS,
+    Windows,
+    Unsupported,
+}
+
+/// Whether Chystik can prove that cleanup reaches a native recovery mechanism.
+///
+/// There is intentionally no direct-delete variant. A platform must opt in to
+/// native-trash cleanup only after its link/reparse-point safety contract has
+/// a real integration test; otherwise it remains a useful scan-only app.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CleanupSupport {
+    NativeTrash,
+    ScanOnly { reason: &'static str },
+}
+
+impl CleanupSupport {
+    pub fn is_available(self) -> bool {
+        matches!(self, Self::NativeTrash)
+    }
+
+    pub fn reason(self) -> Option<&'static str> {
+        match self {
+            Self::NativeTrash => None,
+            Self::ScanOnly { reason } => Some(reason),
+        }
+    }
+}
+
+/// Directories Chystik owns for its own persistent state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppPaths {
+    pub home_dir: PathBuf,
+    pub config_dir: PathBuf,
+    pub cache_dir: PathBuf,
+}
+
+/// Platform-owned bases for explicit privacy traces.
+///
+/// The privacy catalogue names only a relative suffix. The adapter owns the
+/// OS-specific base (for example Windows' roaming versus local profile), so
+/// callers never guess environment-variable paths or loosen a deletion root.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PrivacyRoots {
+    pub home_dir: PathBuf,
+    pub roaming_dir: Option<PathBuf>,
+    pub local_dir: Option<PathBuf>,
+}
+
+/// An opaque stable identity for an object already approved by the guard.
+///
+/// Each adapter uses the host's native file identity where it has one. The
+/// cleaner compares this immediately before handing a path to native Trash.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PathIdentity {
+    first: u64,
+    second: u64,
+}
+
+impl PathIdentity {
+    pub(crate) const fn new(first: u64, second: u64) -> Self {
+        Self { first, second }
+    }
+}
+
+/// A mounted user-visible volume.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StorageVolume {
+    pub source: String,
+    pub mount_point: PathBuf,
+    pub fs_type: String,
+    pub total_bytes: u64,
+    pub free_bytes: u64,
+}
+
+/// Capacity for an arbitrary path, when the host can read it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StorageStats {
+    pub total_bytes: u64,
+    pub free_bytes: u64,
+}
+
+trait Adapter: Send + Sync {
+    fn kind(&self) -> PlatformKind;
+    fn app_paths(&self) -> AppPaths;
+    fn privacy_roots(&self) -> PrivacyRoots;
+    fn storage_volumes(&self) -> Vec<StorageVolume>;
+    fn unscannable_roots(&self) -> Vec<PathBuf>;
+    fn default_skip_roots(&self) -> Vec<PathBuf>;
+    fn storage_stats(&self, path: &Path) -> Option<StorageStats>;
+    fn allocated_bytes(&self, metadata: &Metadata) -> u64;
+    fn path_identity(&self, path: &Path) -> Option<PathIdentity>;
+    fn is_protected_system_path(&self, path: &Path) -> bool;
+    /// True for a symlink or any host-specific indirection such as a Windows
+    /// junction. Errors are treated as unsafe by implementations.
+    fn is_link_or_reparse_point(&self, path: &Path) -> bool;
+    fn cleanup_support(&self) -> CleanupSupport;
+}
+
+/// A small public interface over the target-selected platform adapter.
+///
+/// The adapter itself is private: callers learn one interface, while the
+/// implementation can use `/proc`, APFS conventions, Win32 drive APIs or a
+/// test double without leaking those choices into scanner/GUI/CLI code.
+#[derive(Clone, Copy)]
+pub struct Platform {
+    adapter: &'static dyn Adapter,
+}
+
+impl Platform {
+    pub fn kind(self) -> PlatformKind {
+        self.adapter.kind()
+    }
+
+    pub fn app_paths(self) -> AppPaths {
+        self.adapter.app_paths()
+    }
+
+    pub(crate) fn privacy_roots(self) -> PrivacyRoots {
+        self.adapter.privacy_roots()
+    }
+
+    pub fn storage_volumes(self) -> Vec<StorageVolume> {
+        self.adapter.storage_volumes()
+    }
+
+    pub fn unscannable_roots(self) -> Vec<PathBuf> {
+        self.adapter.unscannable_roots()
+    }
+
+    pub fn default_skip_roots(self) -> Vec<PathBuf> {
+        self.adapter.default_skip_roots()
+    }
+
+    pub fn storage_stats(self, path: &Path) -> Option<StorageStats> {
+        self.adapter.storage_stats(path)
+    }
+
+    /// Allocated bytes when the host exposes them, otherwise logical bytes.
+    pub fn allocated_bytes(self, metadata: &Metadata) -> u64 {
+        self.adapter.allocated_bytes(metadata)
+    }
+
+    pub(crate) fn path_identity(self, path: &Path) -> Option<PathIdentity> {
+        self.adapter.path_identity(path)
+    }
+
+    pub fn is_protected_system_path(self, path: &Path) -> bool {
+        self.adapter.is_protected_system_path(path)
+    }
+
+    pub(crate) fn is_link_or_reparse_point(self, path: &Path) -> bool {
+        self.adapter.is_link_or_reparse_point(path)
+    }
+
+    pub fn cleanup_support(self) -> CleanupSupport {
+        self.adapter.cleanup_support()
+    }
+}
+
+/// Return the platform selected at compile time for this binary.
+pub fn current() -> Platform {
+    Platform {
+        adapter: current_adapter(),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn current_adapter() -> &'static dyn Adapter {
+    &linux::ADAPTER
+}
+
+#[cfg(target_os = "macos")]
+fn current_adapter() -> &'static dyn Adapter {
+    &macos::ADAPTER
+}
+
+#[cfg(target_os = "windows")]
+fn current_adapter() -> &'static dyn Adapter {
+    &windows::ADAPTER
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+fn current_adapter() -> &'static dyn Adapter {
+    &unsupported::ADAPTER
+}
+
+/// Longest mount point containing `path`.
+pub fn mount_of(path: &Path, mounts: &[StorageVolume]) -> Option<String> {
+    mounts
+        .iter()
+        .filter(|mount| path.starts_with(&mount.mount_point))
+        .max_by_key(|mount| mount.mount_point.as_os_str().len())
+        .map(|mount| mount.mount_point.to_string_lossy().into_owned())
+}
+
+fn env_absolute(name: &str) -> Option<PathBuf> {
+    std::env::var_os(name)
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+}
+
+fn home_dir() -> Option<PathBuf> {
+    env_absolute("HOME").or_else(|| env_absolute("USERPROFILE"))
+}
+
+fn home_dir_or_current() -> PathBuf {
+    home_dir()
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Privacy tests use an isolated home so probing never reads a developer's
+/// real trace files. Keep that override local to the privacy resolver rather
+/// than changing application configuration paths for the whole test process.
+fn privacy_home_dir_or_current() -> PathBuf {
+    #[cfg(test)]
+    if let Some(home) = env_absolute("CHYSTIK_TEST_HOME") {
+        return home;
+    }
+    home_dir_or_current()
+}
+
+fn app_dir_or_current(base: Option<PathBuf>, suffix: &[&str]) -> PathBuf {
+    let mut path = base
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."));
+    for segment in suffix {
+        path.push(segment);
+    }
+    path
+}
+
+/// Move one path to the Windows Recycle Bin, or fail without deleting it.
+///
+/// This is intentionally separate from the cross-platform `trash` crate:
+/// Windows exposes an explicit `FOFX_RECYCLEONDELETE` flag that guarantees a
+/// delete is recycled rather than being only undoable when possible.
+#[cfg(target_os = "windows")]
+pub(crate) fn recycle_to_windows_bin(path: &Path) -> Result<(), String> {
+    windows::recycle_to_bin(path)
+}
+
+/// Create a directory junction without relying on shell-quoted paths.
+///
+/// `mklink` is a `cmd.exe` builtin. Passing the command and its path
+/// arguments separately lets Rust quote each path correctly, which matters
+/// for GitHub-hosted workspaces and user profiles that contain spaces.
+#[cfg(all(test, target_os = "windows"))]
+pub(crate) fn create_test_junction(link: &Path, target: &Path) -> std::io::Result<()> {
+    let output = std::process::Command::new("cmd")
+        .args(["/D", "/C", "mklink", "/J"])
+        .arg(link)
+        .arg(target)
+        .output()?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let detail = String::from_utf8_lossy(&output.stderr);
+    Err(std::io::Error::other(format!(
+        "mklink /J exited with {}: {detail}",
+        output.status
+    )))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+fn portable_path_identity(path: &Path) -> Option<PathIdentity> {
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    (!meta.file_type().is_symlink()).then(|| {
+        let modified = meta
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |duration| {
+                duration.as_nanos().min(u64::MAX as u128) as u64
+            });
+        PathIdentity::new(meta.len(), modified)
+    })
+}
+
+#[cfg(unix)]
+fn unix_path_identity(path: &Path) -> Option<PathIdentity> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    (!meta.file_type().is_symlink()).then(|| PathIdentity::new(meta.dev(), meta.ino()))
+}
+
+#[cfg(unix)]
+fn unix_is_link(path: &Path) -> bool {
+    std::fs::symlink_metadata(path)
+        .map(|meta| meta.file_type().is_symlink())
+        .unwrap_or(true)
+}
+
+fn is_under(path: &Path, root: &Path, case_insensitive: bool) -> bool {
+    if !case_insensitive {
+        return path.starts_with(root);
+    }
+    let path = path
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_ascii_lowercase();
+    let root = root
+        .to_string_lossy()
+        .replace('/', "\\")
+        .to_ascii_lowercase();
+    path == root || path.starts_with(&(root + "\\"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn current_platform_has_an_absolute_config_directory() {
+        let paths = current().app_paths();
+        assert!(paths.home_dir.is_absolute());
+        assert!(paths.config_dir.is_absolute());
+    }
+
+    #[test]
+    fn current_platform_advertises_only_native_trash_or_scan_only() {
+        assert!(matches!(
+            current().cleanup_support(),
+            CleanupSupport::NativeTrash | CleanupSupport::ScanOnly { .. }
+        ));
+    }
+
+    #[test]
+    fn cleanup_support_exposes_a_reason_only_when_cleanup_is_unavailable() {
+        assert_eq!(CleanupSupport::NativeTrash.reason(), None);
+        assert_eq!(
+            CleanupSupport::ScanOnly {
+                reason: "native trash needs verification",
+            }
+            .reason(),
+            Some("native trash needs verification")
+        );
+    }
+
+    #[test]
+    fn mount_lookup_prefers_the_deepest_path_prefix() {
+        let volumes = vec![
+            StorageVolume {
+                source: "root".into(),
+                mount_point: PathBuf::from("/"),
+                fs_type: "test".into(),
+                total_bytes: 1,
+                free_bytes: 1,
+            },
+            StorageVolume {
+                source: "home".into(),
+                mount_point: PathBuf::from("/home"),
+                fs_type: "test".into(),
+                total_bytes: 1,
+                free_bytes: 1,
+            },
+        ];
+        assert_eq!(
+            mount_of(Path::new("/home/u/cache"), &volumes).as_deref(),
+            Some("/home")
+        );
+    }
+
+    #[test]
+    fn mount_lookup_never_confuses_a_sibling_prefix_for_a_mount() {
+        let volumes = vec![StorageVolume {
+            source: "home".into(),
+            mount_point: PathBuf::from("/home"),
+            fs_type: "test".into(),
+            total_bytes: 1,
+            free_bytes: 1,
+        }];
+
+        assert_eq!(mount_of(Path::new("/homebrew/cache"), &volumes), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_policy_protects_system_paths_and_keeps_cleanup_native() {
+        let host = current();
+        assert_eq!(host.kind(), PlatformKind::Linux);
+        assert_eq!(host.cleanup_support(), CleanupSupport::NativeTrash);
+        assert!(host.is_protected_system_path(Path::new("/var/lib/private")));
+        assert!(!host.is_protected_system_path(Path::new("/tmp/chystik-fixture")));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_policy_uses_native_trash_and_protects_system_paths() {
+        let host = current();
+        assert_eq!(host.kind(), PlatformKind::MacOS);
+        assert_eq!(host.cleanup_support(), CleanupSupport::NativeTrash);
+        assert!(host.is_protected_system_path(Path::new("/System/Library")));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_policy_uses_native_trash_and_protects_children_of_every_system_root() {
+        let host = current();
+        assert_eq!(host.kind(), PlatformKind::Windows);
+        assert_eq!(host.cleanup_support(), CleanupSupport::NativeTrash);
+        for root in host.default_skip_roots() {
+            assert!(
+                host.is_protected_system_path(&root.join("chystik-test-child")),
+                "{} must protect descendants",
+                root.display()
+            );
+        }
+    }
+
+    #[test]
+    fn case_insensitive_path_policy_still_respects_component_boundaries() {
+        assert!(is_under(
+            Path::new("C:\\Program Files\\App"),
+            Path::new("c:\\program files"),
+            true,
+        ));
+        assert!(!is_under(
+            Path::new("C:\\Program Files Old\\App"),
+            Path::new("c:\\program files"),
+            true,
+        ));
+    }
+}

@@ -1,4 +1,6 @@
-//! End-to-end deletion flow, run on every CI job.
+#![cfg(unix)]
+
+//! End-to-end deletion flow, run on Unix CI jobs.
 //!
 //! Until the flow moved behind `cleaner::Remover` the only test that touched
 //! it needed a real desktop trash and was therefore `#[ignore]`d — the one

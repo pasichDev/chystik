@@ -1,0 +1,192 @@
+name: Release artifacts
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  validate:
+    name: Validate release contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Verify release version and notes
+        run: |
+          bash packaging/linux/verify-version.sh "$GITHUB_REF_NAME"
+          bash packaging/linux/release-notes.sh "$GITHUB_REF_NAME" > "$RUNNER_TEMP/release-notes.md"
+
+      - name: Verify tagged commit is on main
+        run: |
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+
+  linux:
+    name: Package Linux x86_64
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Package build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cpio desktop-file-utils file libgtk-3-dev libxkbcommon-dev libxkbcommon-x11-0 \
+            libwayland-dev patchelf pkg-config rpm xvfb zsync
+
+      - name: Build and verify artifacts
+        run: |
+          mkdir -p "$RUNNER_TEMP/chystik-dist"
+          DIST_DIR="$RUNNER_TEMP/chystik-dist" bash packaging/linux/build-deb.sh
+          DIST_DIR="$RUNNER_TEMP/chystik-dist" bash packaging/linux/build-rpm.sh
+          DIST_DIR="$RUNNER_TEMP/chystik-dist" bash packaging/linux/build-appimage.sh
+          (cd "$RUNNER_TEMP/chystik-dist" && sha256sum -c ./*.sha256)
+          mkdir -p "$RUNNER_TEMP/chystik-extracted/deb" "$RUNNER_TEMP/chystik-extracted/rpm"
+          dpkg-deb -x "$RUNNER_TEMP/chystik-dist"/*.deb "$RUNNER_TEMP/chystik-extracted/deb"
+          rpm2cpio "$RUNNER_TEMP/chystik-dist"/*.rpm | (cd "$RUNNER_TEMP/chystik-extracted/rpm" && cpio -idm)
+          bash packaging/linux/smoke-launch.sh "$RUNNER_TEMP/chystik-extracted/deb/usr/bin/chystik-gui"
+          bash packaging/linux/smoke-launch.sh "$RUNNER_TEMP/chystik-extracted/rpm/usr/bin/chystik-gui"
+          bash packaging/linux/smoke-launch.sh "$RUNNER_TEMP/chystik-dist"/*.AppImage
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chystik-linux-${{ github.sha }}
+          path: ${{ runner.temp }}/chystik-dist/
+          if-no-files-found: error
+
+  windows:
+    name: Package Windows ${{ matrix.name }}
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The x64 binary uses the Windows 10-compatible MSVC target. GitHub
+          # provides Server 2022 here, not a Windows 10 desktop image.
+          - name: x64
+            runner: windows-2022
+            target: x86_64-pc-windows-msvc
+            asset: x86_64
+          # Native Arm64 execution proves this is not a cross-compiled-only artifact.
+          - name: ARM64
+            runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            asset: aarch64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Verify native cleanup safety
+        run: |
+          cargo test -p chystik-core --lib
+          cargo test -p chystik-core --test native_trash -- --ignored --exact
+
+      - name: Build portable archive
+        shell: pwsh
+        env:
+          CHYSTIK_TARGET: ${{ matrix.target }}
+          CHYSTIK_ASSET: ${{ matrix.asset }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"').Matches[0].Groups[1].Value
+          if (-not $version) { throw 'could not read workspace version' }
+          cargo build --locked --release --package chystik-gui --target $env:CHYSTIK_TARGET
+          $dist = Join-Path $env:RUNNER_TEMP 'chystik-windows-dist'
+          $stage = Join-Path $dist "Chystik-$version-windows-$env:CHYSTIK_ASSET"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item "target/$env:CHYSTIK_TARGET/release/chystik-gui.exe" (Join-Path $stage 'Chystik.exe')
+          Copy-Item LICENSE, README.md -Destination $stage
+          $archive = Join-Path $dist "Chystik-$version-windows-$env:CHYSTIK_ASSET.zip"
+          Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $archive -Force
+          if ((Get-Item $archive).Length -eq 0) { throw "empty archive: $archive" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chystik-windows-${{ matrix.asset }}-${{ github.sha }}
+          path: ${{ runner.temp }}/chystik-windows-dist/*.zip
+          if-no-files-found: error
+
+  publish:
+    name: Publish tagged release
+    needs: [validate, linux, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract release notes
+        run: bash packaging/linux/release-notes.sh "$GITHUB_REF_NAME" > "$RUNNER_TEMP/release-notes.md"
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/chystik-release
+          pattern: chystik-*-${{ github.sha }}
+          merge-multiple: true
+
+      - name: Verify complete asset set and create checksums
+        run: |
+          set -euo pipefail
+          dist="$RUNNER_TEMP/chystik-release"
+          shopt -s nullglob
+          assets=(
+            "$dist"/*.AppImage
+            "$dist"/*.deb
+            "$dist"/*.rpm
+            "$dist"/*-windows-x86_64.zip
+            "$dist"/*-windows-aarch64.zip
+          )
+          [[ "${#assets[@]}" -eq 5 ]] || {
+            printf 'expected five distributable assets, got %s:\n' "${#assets[@]}" >&2
+            printf '  %s\n' "${assets[@]}" >&2
+            exit 1
+          }
+          (cd "$dist" && sha256sum -- *.AppImage *.deb *.rpm *-windows-x86_64.zip *-windows-aarch64.zip > SHA256SUMS)
+          (cd "$dist" && sha256sum -c SHA256SUMS)
+
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "refusing to overwrite existing release $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            --verify-tag \
+            --fail-on-no-commits \
+            --title "Chystik ${GITHUB_REF_NAME#v}" \
+            --notes-file "$RUNNER_TEMP/release-notes.md" \
+            "$RUNNER_TEMP/chystik-release"/*.AppImage \
+            "$RUNNER_TEMP/chystik-release"/*.AppImage.sha256 \
+            "$RUNNER_TEMP/chystik-release"/*.deb \
+            "$RUNNER_TEMP/chystik-release"/*.rpm \
+            "$RUNNER_TEMP/chystik-release"/*.zip \
+            "$RUNNER_TEMP/chystik-release"/SHA256SUMS

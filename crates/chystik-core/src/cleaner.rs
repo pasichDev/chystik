@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 
 use crate::guard;
 use crate::model::ChystikError;
+use crate::platform::{self, CleanupSupport};
 
 /// Somewhere a file can be sent. The only production implementation is
 /// [`SystemTrash`]; tests use a fake.
@@ -36,13 +37,16 @@ pub trait Remover: Send + Sync {
     }
 }
 
-/// The desktop trash, via the XDG trash specification.
+/// The verified desktop trash implementation.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SystemTrash;
 
 impl Remover for SystemTrash {
     fn remove(&self, path: &Path) -> Result<(), ChystikError> {
-        trash::delete(path).map_err(|e| ChystikError::Io(std::io::Error::other(e.to_string())))
+        if let CleanupSupport::ScanOnly { reason } = platform::current().cleanup_support() {
+            return Err(ChystikError::Io(std::io::Error::other(reason)));
+        }
+        move_to_trash(path).map_err(|error| ChystikError::Io(std::io::Error::other(error)))
     }
 
     fn describe(&self) -> &'static str {
@@ -50,33 +54,49 @@ impl Remover for SystemTrash {
     }
 }
 
-/// Enough of a path's identity to notice it was swapped underneath us.
-///
-/// Device and inode together identify a filesystem object. A symlink put in
-/// place of a validated directory has a different inode, so comparing this
-/// immediately before removal catches the substitution.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FileIdentity {
-    device: u64,
-    inode: u64,
-    is_symlink: bool,
-}
+fn move_to_trash(path: &Path) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        // NSFileManager uses the native Trash API without requiring Finder
+        // automation permission. It still leaves the item recoverable in
+        // Trash, which is the contract exposed by this application.
+        use trash::macos::{DeleteMethod, TrashContextExtMacos};
 
-impl FileIdentity {
-    /// Read without following symlinks. `None` when the path is gone.
-    pub fn of(path: &Path) -> Option<Self> {
-        use std::os::unix::fs::MetadataExt;
-        let meta = std::fs::symlink_metadata(path).ok()?;
-        Some(Self {
-            device: meta.dev(),
-            inode: meta.ino(),
-            is_symlink: meta.file_type().is_symlink(),
-        })
+        let mut context = trash::TrashContext::default();
+        context.set_delete_method(DeleteMethod::NsFileManager);
+        context.delete(path).map_err(|error| error.to_string())
     }
 
-    /// True when `path` is still the very same object, and still not a link.
+    #[cfg(target_os = "windows")]
+    {
+        crate::platform::recycle_to_windows_bin(path)
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        trash::delete(path).map_err(|error| error.to_string())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Enough of a path's identity to notice it was swapped underneath us.
+///
+/// The platform adapter supplies a native object identity (device/inode on
+/// Unix; volume serial/file index on Windows) without following a link or a
+/// reparse point. Comparing it immediately before removal catches a changed
+/// target and makes reparse-point substitution fail closed.
+pub struct FileIdentity(crate::platform::PathIdentity);
+
+impl FileIdentity {
+    /// Read a stable host identity without following a link or reparse point.
+    /// `None` means the object is gone or cannot be proven safe.
+    pub fn of(path: &Path) -> Option<Self> {
+        platform::current().path_identity(path).map(Self)
+    }
+
+    /// True when `path` is still the very same, non-indirected object.
     pub fn still_matches(&self, path: &Path) -> bool {
-        !self.is_symlink && Self::of(path).is_some_and(|now| now == *self)
+        Self::of(path).is_some_and(|now| now == *self)
     }
 }
 
@@ -99,6 +119,8 @@ pub enum SkipReason {
     Refused,
     /// Chystik does not own this space; it carries a command instead.
     Advisory,
+    /// The host has no tested native trash + link-safety implementation.
+    CleanupUnavailable(&'static str),
     /// It changed between validation and removal.
     ChangedUnderUs,
     /// The remover itself failed.
@@ -132,7 +154,22 @@ impl CleanupOutcome {
 /// Run the flow over `items`. Never panics and never stops early: one bad
 /// item must not prevent the rest from being cleaned.
 pub fn clean(items: &[CleanupItem], remover: &dyn Remover) -> CleanupOutcome {
+    clean_with_support(items, remover, platform::current().cleanup_support())
+}
+
+fn clean_with_support(
+    items: &[CleanupItem],
+    remover: &dyn Remover,
+    support: CleanupSupport,
+) -> CleanupOutcome {
     let mut outcome = CleanupOutcome::default();
+    if let CleanupSupport::ScanOnly { reason } = support {
+        outcome.skipped.extend(items.iter().map(|item| Skipped {
+            path: item.path.clone(),
+            reason: SkipReason::CleanupUnavailable(reason),
+        }));
+        return outcome;
+    }
     for item in items {
         let path = item.path.clone();
 
@@ -184,7 +221,21 @@ pub fn clean(items: &[CleanupItem], remover: &dyn Remover) -> CleanupOutcome {
 mod tests {
     use super::*;
     use std::sync::Mutex;
-    use tempfile::tempdir;
+
+    /// macOS puts the default temporary directory below `/var`, which the
+    /// production guard correctly treats as a protected system location.
+    /// Safety fixtures need a user-writable, non-system root on every host.
+    fn tempdir() -> std::io::Result<tempfile::TempDir> {
+        tempfile::Builder::new()
+            .prefix(".chystik-test-")
+            .tempdir_in(std::env::current_dir().expect("test process has a working directory"))
+    }
+
+    /// Exercise the portable validate/identity/remover flow without claiming
+    /// that the current host has a native recovery mechanism.
+    fn clean_with_native_trash(items: &[CleanupItem], remover: &dyn Remover) -> CleanupOutcome {
+        clean_with_support(items, remover, CleanupSupport::NativeTrash)
+    }
 
     /// Records what it was asked to remove and leaves the disk alone.
     #[derive(Default)]
@@ -227,7 +278,7 @@ mod tests {
         std::fs::create_dir_all(&b).unwrap();
 
         let remover = FakeRemover::default();
-        let outcome = clean(
+        let outcome = clean_with_native_trash(
             &[item(&a, root.path(), 100), item(&b, root.path(), 250)],
             &remover,
         );
@@ -238,8 +289,97 @@ mod tests {
         assert_eq!(remover.seen().len(), 2);
     }
 
+    #[test]
+    fn scan_only_platform_never_hands_a_path_to_the_remover() {
+        let root = tempdir().unwrap();
+        let target = root.path().join("cache");
+        std::fs::create_dir_all(&target).unwrap();
+        let remover = FakeRemover::default();
+
+        let outcome = clean_with_support(
+            &[item(&target, root.path(), 100)],
+            &remover,
+            CleanupSupport::ScanOnly {
+                reason: "native trash has not been verified",
+            },
+        );
+
+        assert!(remover.seen().is_empty());
+        assert!(matches!(
+            outcome.skipped.as_slice(),
+            [Skipped {
+                reason: SkipReason::CleanupUnavailable(_),
+                ..
+            }]
+        ));
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    #[test]
+    fn current_scan_only_platform_never_hands_a_path_to_the_remover() {
+        let root = tempdir().unwrap();
+        let target = root.path().join("cache");
+        std::fs::create_dir_all(&target).unwrap();
+        let remover = FakeRemover::default();
+
+        let outcome = clean(&[item(&target, root.path(), 100)], &remover);
+
+        assert!(remover.seen().is_empty());
+        assert!(matches!(
+            outcome.skipped.as_slice(),
+            [Skipped {
+                reason: SkipReason::CleanupUnavailable(_),
+                ..
+            }]
+        ));
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    #[test]
+    fn system_trash_itself_refuses_on_a_scan_only_platform() {
+        let CleanupSupport::ScanOnly { reason } = platform::current().cleanup_support() else {
+            panic!("this test runs only where cleanup must be unavailable");
+        };
+        let error = SystemTrash
+            .remove(Path::new("this path never needs to exist"))
+            .expect_err("scan-only platforms must refuse before calling the trash backend");
+        assert_eq!(error.to_string(), format!("io error: {reason}"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn system_trash_moves_a_fixture_through_macos_native_trash() {
+        let root = tempdir().unwrap();
+        let target = root.path().join("chystik-macos-native-trash-smoke");
+        std::fs::write(&target, "safe smoke-test fixture").unwrap();
+
+        let outcome = clean(&[item(&target, root.path(), 25)], &SystemTrash);
+
+        assert_eq!(outcome.removed, vec![target.clone()]);
+        assert_eq!(outcome.freed_bytes, 25);
+        assert!(outcome.skipped.is_empty());
+        assert!(!target.exists());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_identity_refuses_a_junction_object() {
+        let root = tempdir().unwrap();
+        let real = root.path().join("real-cache");
+        std::fs::create_dir_all(&real).unwrap();
+        let junction = root.path().join("cache-junction");
+        crate::platform::create_test_junction(&junction, &real).expect("create a junction fixture");
+
+        assert!(
+            FileIdentity::of(&junction).is_none(),
+            "the identity guard must not follow a Windows junction"
+        );
+        std::fs::remove_dir(&junction).expect("remove only the junction, not its target");
+    }
+
     /// The whole point of the abstraction: a refused path must never reach
     /// the remover at all.
+    #[cfg(unix)]
     #[test]
     fn a_symlinked_parent_never_reaches_the_remover() {
         let root = tempdir().unwrap();
@@ -249,7 +389,8 @@ mod tests {
         std::os::unix::fs::symlink(&real, &link).unwrap();
 
         let remover = FakeRemover::default();
-        let outcome = clean(&[item(&link.join("sub"), root.path(), 10)], &remover);
+        let outcome =
+            clean_with_native_trash(&[item(&link.join("sub"), root.path(), 10)], &remover);
 
         assert!(remover.seen().is_empty(), "the remover was handed a link");
         assert_eq!(outcome.skipped.len(), 1);
@@ -261,6 +402,7 @@ mod tests {
     ///
     /// The identity captured after `guard::check` no longer matches, which
     /// is what narrows the window between validating and removing.
+    #[cfg(unix)]
     #[test]
     fn a_path_swapped_after_validation_is_skipped() {
         let root = tempdir().unwrap();
@@ -280,7 +422,7 @@ mod tests {
         );
         // And a fresh run refuses it outright, since it is now a symlink.
         let remover = FakeRemover::default();
-        let outcome = clean(&[item(&victim, root.path(), 1)], &remover);
+        let outcome = clean_with_native_trash(&[item(&victim, root.path(), 1)], &remover);
         assert!(remover.seen().is_empty());
         assert_eq!(outcome.skipped[0].reason, SkipReason::Refused);
     }
@@ -301,7 +443,7 @@ mod tests {
         let orphan = root.path().join("orphan");
         std::fs::create_dir_all(&orphan).unwrap();
         let remover = FakeRemover::default();
-        let outcome = clean(
+        let outcome = clean_with_native_trash(
             &[CleanupItem {
                 path: orphan,
                 size_bytes: 5,
@@ -325,7 +467,7 @@ mod tests {
             fail: true,
             ..Default::default()
         };
-        let outcome = clean(
+        let outcome = clean_with_native_trash(
             &[item(&a, root.path(), 10), item(&b, root.path(), 20)],
             &remover,
         );
@@ -344,7 +486,7 @@ mod tests {
         let root = tempdir().unwrap();
         let gone = root.path().join("gone");
         let remover = FakeRemover::default();
-        let outcome = clean(&[item(&gone, root.path(), 1)], &remover);
+        let outcome = clean_with_native_trash(&[item(&gone, root.path(), 1)], &remover);
         assert!(remover.seen().is_empty());
         assert_eq!(outcome.skipped.len(), 1);
     }

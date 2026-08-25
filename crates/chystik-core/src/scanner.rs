@@ -28,7 +28,7 @@ pub struct ScanOptions {
     /// Skip entries matching these names at any depth.
     pub skip_names: Vec<String>,
     /// Also skip mount points of pseudo/network filesystems
-    /// (`chystik_core::disks::unscannable_mount_points`). Nothing there is
+    /// (`chystik_core::platform::Platform::unscannable_roots`). Nothing there is
     /// cleanable, and an unreachable network mount stalls the walk.
     pub skip_unscannable_mounts: bool,
     /// Drop findings smaller than this. Without a floor, ~3 of every 4
@@ -52,18 +52,13 @@ impl Default for ScanOptions {
     fn default() -> Self {
         Self {
             follow_symlinks: false,
-            skip_names: vec![
-                "/proc".into(),
-                "/sys".into(),
-                "/dev".into(),
-                "/run".into(),
-                // Package-manager territory: guard refuses every deletion
-                // here, so classifying it produced pure noise — 692 of 977
-                // findings on a `/` scan, none of them actionable.
-                "/usr".into(),
-                "/var".into(),
-                "/opt".into(),
-            ],
+            // Platform policy owns system roots. This makes an explicit scan
+            // of `C:\\`/`/` safe without teaching the rule engine OS paths.
+            skip_names: crate::platform::current()
+                .default_skip_roots()
+                .into_iter()
+                .map(|path| path.to_string_lossy().into_owned())
+                .collect(),
             skip_unscannable_mounts: true,
             min_finding_bytes: 1024 * 1024,
             exclude: Vec::new(),
@@ -139,6 +134,7 @@ fn scan_root(
         root: root.to_path_buf(),
     });
 
+    let host = crate::platform::current();
     let found: Arc<Mutex<Vec<Finding>>> = Arc::new(Mutex::new(Vec::new()));
     let walker_tx = tx.clone();
     let walker_dirs = dirs.clone();
@@ -147,7 +143,7 @@ fn scan_root(
     let mut skip = options.skip_names.clone();
     if options.skip_unscannable_mounts {
         skip.extend(
-            crate::disks::unscannable_mount_points()
+            host.unscannable_roots()
                 .into_iter()
                 .map(|m| m.to_string_lossy().into_owned()),
         );
@@ -163,7 +159,7 @@ fn scan_root(
     // possible even though `/var` is skipped during a `/` scan.
     skip.retain(|s| !root.starts_with(s));
     let min_bytes = options.min_finding_bytes;
-    let mounts = crate::disks::mount_table();
+    let mounts = host.storage_volumes();
 
     let walker = WalkDir::new(root)
         .follow_links(options.follow_symlinks)
@@ -191,7 +187,7 @@ fn scan_root(
                 let mut candidates: Vec<(PathBuf, std::time::SystemTime, u64)> = children
                     .iter()
                     .flatten()
-                    .filter(|e| !e.file_type().is_symlink())
+                    .filter(|e| !host.is_link_or_reparse_point(&e.path()))
                     .filter_map(|e| {
                         let path = e.path();
                         let meta = std::fs::symlink_metadata(&path).ok()?;
@@ -212,7 +208,7 @@ fn scan_root(
                     if n.is_multiple_of(1000) {
                         let _ = walker_tx.send(ScanProgress::DirectoriesScanned { count: n });
                     }
-                    let (size_bytes, last_used) = entry_stats(&path, &walker_cancel);
+                    let (size_bytes, last_used) = entry_stats(&path, &walker_cancel, host);
                     if size_bytes < min_bytes {
                         continue;
                     }
@@ -222,7 +218,7 @@ fn scan_root(
                         severity: rule.severity,
                         size_bytes,
                         last_used,
-                        mount: crate::disks::mount_of_in(&path, &mounts),
+                        mount: crate::platform::mount_of(&path, &mounts),
                         note: rule.note.to_owned(),
                         advice: None,
                     };
@@ -233,7 +229,10 @@ fn scan_root(
             }
 
             for entry in children.iter_mut().flatten() {
-                if entry.depth == 0 || entry.file_type().is_symlink() || !entry.file_type().is_dir()
+                if entry.depth == 0
+                    || entry.file_type().is_symlink()
+                    || host.is_link_or_reparse_point(&entry.path())
+                    || !entry.file_type().is_dir()
                 {
                     continue;
                 }
@@ -250,7 +249,7 @@ fn scan_root(
                     let _ = walker_tx.send(ScanProgress::DirectoriesScanned { count: n });
                 }
                 if let Some(m) = rules::classify(&path) {
-                    let (size_bytes, last_used) = dir_stats(&path, &walker_cancel);
+                    let (size_bytes, last_used) = dir_stats(&path, &walker_cancel, host);
                     // Prune regardless of the size floor: a matched subtree
                     // is claimed whether or not it is worth reporting.
                     entry.read_children_path = None;
@@ -263,7 +262,7 @@ fn scan_root(
                         severity: m.severity,
                         size_bytes,
                         last_used,
-                        mount: crate::disks::mount_of_in(&path, &mounts),
+                        mount: crate::platform::mount_of(&path, &mounts),
                         note: m.note,
                         advice: None,
                     };
@@ -293,24 +292,28 @@ fn scan_root(
 }
 
 /// Size and mtime of one entry, whether it is a file or a whole subtree.
-fn entry_stats(path: &Path, cancel: &AtomicBool) -> (u64, Option<DateTime<Utc>>) {
-    use std::os::unix::fs::MetadataExt;
-
+fn entry_stats(
+    path: &Path,
+    cancel: &AtomicBool,
+    host: crate::platform::Platform,
+) -> (u64, Option<DateTime<Utc>>) {
     let Ok(meta) = std::fs::symlink_metadata(path) else {
         return (0, None);
     };
     if meta.is_dir() {
-        return dir_stats(path, cancel);
+        return dir_stats(path, cancel, host);
     }
     let last_used = meta.modified().ok().map(DateTime::<Utc>::from);
-    (meta.blocks() * 512, last_used)
+    (host.allocated_bytes(&meta), last_used)
 }
 
 /// Sum of allocated blocks and max mtime over regular files in a subtree.
 /// Used only for matched (pruned) directories, which jwalk will not enter again.
-fn dir_stats(dir: &Path, cancel: &AtomicBool) -> (u64, Option<DateTime<Utc>>) {
-    use std::os::unix::fs::MetadataExt;
-
+fn dir_stats(
+    dir: &Path,
+    cancel: &AtomicBool,
+    host: crate::platform::Platform,
+) -> (u64, Option<DateTime<Utc>>) {
     let mut stack = vec![dir.to_path_buf()];
     let (mut bytes, mut newest) = (0u64, None::<DateTime<Utc>>);
     while let Some(path) = stack.pop() {
@@ -325,10 +328,10 @@ fn dir_stats(dir: &Path, cancel: &AtomicBool) -> (u64, Option<DateTime<Utc>>) {
                 continue;
             };
             let file_type = metadata.file_type();
-            if file_type.is_dir() {
+            if file_type.is_dir() && !host.is_link_or_reparse_point(&entry.path()) {
                 stack.push(entry.path());
             } else if file_type.is_file() {
-                bytes += metadata.blocks() * 512;
+                bytes += host.allocated_bytes(&metadata);
                 if let Ok(modified) = metadata.modified() {
                     let timestamp: DateTime<Utc> = modified.into();
                     if newest.map(|current| timestamp > current).unwrap_or(true) {
@@ -495,6 +498,7 @@ mod tests {
     }
 
     /// A versioned store must lose its old entries and keep the newest.
+    #[cfg(unix)]
     #[test]
     fn group_rules_spare_the_newest_and_report_the_rest() {
         use std::time::{Duration, SystemTime};
@@ -542,6 +546,7 @@ mod tests {
     }
 
     /// Set an entry's mtime without pulling in a crate for it.
+    #[cfg(unix)]
     fn filetime_set(path: &std::path::Path, when: std::time::SystemTime) {
         let secs = when
             .duration_since(std::time::UNIX_EPOCH)
@@ -597,10 +602,13 @@ mod tests {
             d.exclude.is_empty(),
             "nothing is excluded until the user says so"
         );
-        for system in ["/usr", "/var", "/opt", "/proc", "/sys", "/dev", "/run"] {
+        for system in crate::platform::current().default_skip_roots() {
             assert!(
-                d.skip_names.iter().any(|s| s == system),
-                "{system} must be skipped"
+                d.skip_names
+                    .iter()
+                    .any(|name| name == &system.to_string_lossy()),
+                "{} must be skipped",
+                system.display()
             );
         }
     }

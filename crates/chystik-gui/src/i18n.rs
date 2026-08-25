@@ -173,6 +173,7 @@ pub struct Strings {
     pub move_to_trash: String,
     pub move_to_trash_idle: String,
     pub move_to_trash_hint: String,
+    pub cleanup_unavailable: String,
     pub disks: String,
     pub disks_hint: String,
     // confirm modal

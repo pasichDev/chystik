@@ -1,4 +1,6 @@
-//! Real-machine smoke tests.
+#![cfg(target_os = "linux")]
+
+//! Linux real-machine smoke tests.
 //!
 //! These touch the real `$HOME` and the real Trash, so they are `#[ignore]`d
 //! by default — they assert against one particular machine and cannot run in
@@ -26,9 +28,7 @@ use chystik_core::model::{Category, Finding, Severity};
 use chystik_core::scanner;
 
 fn home() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .expect("HOME must be set for the smoke test")
+    chystik_core::platform::current().app_paths().home_dir
 }
 
 fn find<'a>(findings: &'a [Finding], suffix: &str) -> Option<&'a Finding> {

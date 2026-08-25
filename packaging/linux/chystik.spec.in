@@ -1,0 +1,41 @@
+Name:           chystik
+Version:        @VERSION@
+Release:        1%{?dist}
+Summary:        Safety-first developer disk cleanup GUI
+License:        MIT
+URL:            https://github.com/pasichDev/chystik
+Source0:        chystik-@VERSION@.tar.gz
+BuildArch:      x86_64
+# The release pipeline repackages a stripped Cargo binary.  There is no source
+# tree or debug data left for RPM's automatic debug packages to consume.
+%global debug_package %{nil}
+Requires:       gtk3
+Requires:       libxkbcommon
+Requires:       libxkbcommon-x11
+Requires:       mesa-libGL
+Requires:       libX11
+Requires:       libxcb
+
+%description
+Chystik classifies developer caches and only moves verified cleanup targets to trash.
+
+%prep
+%setup -q
+
+%build
+
+%install
+rm -rf %{buildroot}
+mkdir -p %{buildroot}
+cp -a . %{buildroot}/
+
+%files
+%license /usr/share/licenses/chystik/LICENSE
+/usr/bin/chystik-gui
+/usr/share/applications/chystik.desktop
+/usr/share/icons/hicolor/*/apps/chystik.png
+/usr/share/icons/hicolor/scalable/apps/chystik.svg
+
+%changelog
+* Tue Aug 25 2026 pasichDev <67899666+pasichDev@users.noreply.github.com> - @VERSION@-1
+- Initial Linux package

@@ -62,6 +62,7 @@
     "move_to_trash": "Move {size} to Trash",
     "move_to_trash_idle": "Move to Trash",
     "move_to_trash_hint": "Nothing is erased: items go to your desktop trash and stay restorable",
+    "cleanup_unavailable": "Cleanup is unavailable on this platform until its native trash safety checks are verified",
     "disks": "Disks",
     "disks_hint": "Mounted volumes and how full they are",
     "confirm_title": "Move to Trash",

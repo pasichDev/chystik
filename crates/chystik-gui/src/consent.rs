@@ -6,7 +6,7 @@
 //! ask again by bumping the version it stores.
 //!
 //! Deliberately NOT stored in the app's own scan territory: it lives in
-//! `$XDG_CONFIG_HOME/chystik/`, and the deletion guard refuses `.config`
+//! the platform-owned app config directory, and the deletion guard refuses `.config`
 //! anyway, so Chystik can never propose deleting its own consent record.
 
 use std::path::PathBuf;
@@ -21,13 +21,12 @@ pub(crate) struct Consent {
     pub acknowledged_version: String,
 }
 
-/// `$XDG_CONFIG_HOME/chystik/consent.json`, falling back to `~/.config`.
-fn consent_path() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(base.join("chystik").join("consent.json"))
+/// The core platform facade selects the config location for this host.
+fn consent_path() -> PathBuf {
+    chystik_core::platform::current()
+        .app_paths()
+        .config_dir
+        .join("consent.json")
 }
 
 /// True when this exact version has already been acknowledged.
@@ -36,9 +35,7 @@ fn consent_path() -> Option<PathBuf> {
 /// is treated as "not acknowledged". Failing towards *showing* the warning is
 /// the only safe direction for a tool that deletes.
 pub(crate) fn is_acknowledged() -> bool {
-    let Some(path) = consent_path() else {
-        return false;
-    };
+    let path = consent_path();
     let Ok(text) = std::fs::read_to_string(path) else {
         return false;
     };
@@ -50,10 +47,7 @@ pub(crate) fn is_acknowledged() -> bool {
 /// Record the acknowledgement. A write failure is reported but not fatal:
 /// the user simply sees the dialog again next launch, which is harmless.
 pub(crate) fn acknowledge() {
-    let Some(path) = consent_path() else {
-        eprintln!("[chystik] no config directory; consent will be asked again");
-        return;
-    };
+    let path = consent_path();
     let record = Consent {
         acknowledged_version: APP_VERSION.to_string(),
     };
@@ -116,12 +110,13 @@ mod tests {
     }
 
     #[test]
-    fn consent_path_lands_under_a_config_directory() {
-        // Only meaningful when the environment provides one; in a bare
-        // sandbox `None` is the correct answer and the dialog just repeats.
-        if let Some(path) = consent_path() {
-            assert!(path.ends_with("chystik/consent.json"), "{path:?}");
-            assert!(path.is_absolute());
-        }
+    fn consent_path_uses_the_core_platform_config_directory() {
+        assert_eq!(
+            consent_path(),
+            chystik_core::platform::current()
+                .app_paths()
+                .config_dir
+                .join("consent.json")
+        );
     }
 }

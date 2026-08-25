@@ -104,13 +104,13 @@ pub(crate) fn classify_group(dir: &Path) -> Option<&'static GroupRule> {
     GROUP_RULES.iter().find(|r| r.rel == rel)
 }
 
-/// `$HOME` for production matching; `CHYSTIK_TEST_HOME` overrides it in
-/// tests so fixtures never touch real user data.
+/// The platform home for production matching; `CHYSTIK_TEST_HOME` overrides
+/// it in tests so fixtures never touch real user data.
 pub(crate) fn home_root() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("CHYSTIK_TEST_HOME") {
         return Some(PathBuf::from(p));
     }
-    std::env::var_os("HOME").map(PathBuf::from)
+    Some(crate::platform::current().app_paths().home_dir)
 }
 
 /// True if `parent` contains any of `markers` (file OR directory).
@@ -223,6 +223,14 @@ pub(crate) fn classify(dir: &Path) -> Option<Match> {
 mod tests {
     use super::*;
 
+    /// Rule/guard agreement fixtures must not be placed under macOS `/var`,
+    /// which is deliberately a protected production location.
+    fn tempdir() -> std::io::Result<tempfile::TempDir> {
+        tempfile::Builder::new()
+            .prefix(".chystik-test-")
+            .tempdir_in(std::env::current_dir().expect("test process has a working directory"))
+    }
+
     /// Every rule must target something the deletion guard actually
     /// permits. Without this, a rule and `guard::check` can disagree
     /// silently and the UI shows findings it can never act on — which is
@@ -231,7 +239,7 @@ mod tests {
     #[test]
     fn every_home_rule_targets_a_path_the_guard_allows() {
         let _env = TEST_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        let home = tempfile::tempdir().unwrap();
+        let home = tempdir().unwrap();
         std::env::set_var("CHYSTIK_TEST_HOME", home.path());
 
         let mut refused = Vec::new();
@@ -251,7 +259,7 @@ mod tests {
 
     #[test]
     fn registry_still_matches_core_rules_via_public_api() {
-        let root = tempfile::tempdir().unwrap();
+        let root = tempdir().unwrap();
         let proj = root.path().join("app");
         std::fs::create_dir_all(proj.join("node_modules")).unwrap();
         std::fs::write(proj.join("package.json"), "{}").unwrap();

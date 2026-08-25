@@ -6,11 +6,6 @@
 use crate::model::ChystikError;
 use std::path::Path;
 
-/// Refuse these absolute paths outright.
-pub const PROTECTED_PREFIXES: &[&str] = &[
-    "/", "/boot", "/etc", "/usr", "/var", "/opt", "/proc", "/sys", "/dev",
-];
-
 /// Refuse these directory names anywhere in the tree.
 pub const PROTECTED_NAMES: &[&str] = &[".git", ".ssh", ".gnupg", ".config"];
 
@@ -84,7 +79,9 @@ pub fn check(candidate: &Path, scan_root: &Path) -> Result<(), ChystikError> {
     let Ok(meta) = std::fs::symlink_metadata(candidate) else {
         return refuse();
     };
-    if meta.file_type().is_symlink() {
+    if meta.file_type().is_symlink()
+        || crate::platform::current().is_link_or_reparse_point(candidate)
+    {
         return refuse();
     }
     if candidate == scan_root || !candidate.starts_with(scan_root) {
@@ -129,7 +126,12 @@ fn has_symlinked_ancestor(candidate: &Path, scan_root: &Path) -> bool {
     for component in components {
         walked.push(component);
         match std::fs::symlink_metadata(&walked) {
-            Ok(meta) if meta.file_type().is_symlink() => return true,
+            Ok(meta)
+                if meta.file_type().is_symlink()
+                    || crate::platform::current().is_link_or_reparse_point(&walked) =>
+            {
+                return true;
+            }
             Ok(_) => {}
             Err(_) => return true, // cannot vouch for it, so refuse
         }
@@ -141,16 +143,8 @@ fn has_symlinked_ancestor(candidate: &Path, scan_root: &Path) -> bool {
 /// `original` is only used to resolve the `.config` allowlist, which is
 /// expressed relative to `$HOME`.
 fn is_protected_location(path: &Path, original: &Path) -> bool {
-    // System locations: equal to a protected prefix or directly under one.
-    let text = path.to_string_lossy();
-    for protected in PROTECTED_PREFIXES {
-        if *protected == "/" {
-            if text == "/" {
-                return true;
-            }
-        } else if text.as_ref() == *protected || text.starts_with(&format!("{protected}/")) {
-            return true;
-        }
+    if crate::platform::current().is_protected_system_path(path) {
+        return true;
     }
     // Protected dot-dirs anywhere along the path. `.config` alone has
     // audited cache exceptions; `.git`/`.ssh`/`.gnupg` never do.
@@ -172,7 +166,7 @@ fn is_protected_location(path: &Path, original: &Path) -> bool {
 /// (used to avoid wasting time in system trees).
 pub fn is_scannable(dir: &Path) -> bool {
     std::fs::symlink_metadata(dir)
-        .map(|m| m.is_dir())
+        .map(|m| m.is_dir() && !crate::platform::current().is_link_or_reparse_point(dir))
         .unwrap_or(false)
 }
 
@@ -180,7 +174,13 @@ pub fn is_scannable(dir: &Path) -> bool {
 mod tests {
     use super::*;
     use std::path::PathBuf;
-    use tempfile::tempdir;
+
+    /// Keep guard fixtures outside macOS's protected `/var` temporary tree.
+    fn tempdir() -> std::io::Result<tempfile::TempDir> {
+        tempfile::Builder::new()
+            .prefix(".chystik-test-")
+            .tempdir_in(std::env::current_dir().expect("test process has a working directory"))
+    }
 
     #[test]
     fn accepts_regular_child_of_scan_root() {
@@ -220,6 +220,7 @@ mod tests {
     /// `symlink_metadata(candidate)` describes only the last component, so
     /// `<root>/cache-link/sub` lstatted a real directory and passed every
     /// lexical test while physically pointing at `important-data/sub`.
+    #[cfg(unix)]
     #[test]
     fn rejects_a_symlinked_parent_inside_the_scan_root() {
         let root = tempdir().unwrap();
@@ -243,6 +244,7 @@ mod tests {
     }
 
     /// Deeper nesting, and a link that leaves the scan root entirely.
+    #[cfg(unix)]
     #[test]
     fn rejects_a_link_that_escapes_the_scan_root() {
         let outside = tempdir().unwrap();
@@ -259,6 +261,7 @@ mod tests {
 
     /// A protected name reached THROUGH a link must still be refused: the
     /// lexical path says nothing about where it lands.
+    #[cfg(unix)]
     #[test]
     fn protected_names_are_checked_on_the_resolved_path_too() {
         let root = tempdir().unwrap();
@@ -269,6 +272,7 @@ mod tests {
         assert!(check(&link.join(".git"), root.path()).is_err());
     }
 
+    #[cfg(unix)]
     #[test]
     fn rejects_symlink_without_following() {
         let root = tempdir().unwrap();
@@ -277,6 +281,27 @@ mod tests {
         let link = root.path().join("link");
         std::os::unix::fs::symlink(&real, &link).unwrap();
         assert!(check(&link, root.path()).is_err());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn rejects_a_junction_before_scanning_or_cleanup() {
+        let root = tempdir().unwrap();
+        let real = root.path().join("real-cache");
+        let target = real.join("deletable");
+        std::fs::create_dir_all(&target).unwrap();
+        let junction = root.path().join("cache-junction");
+        crate::platform::create_test_junction(&junction, &real).expect("create a junction fixture");
+
+        assert!(
+            !is_scannable(&junction),
+            "the scanner must not descend through a Windows junction"
+        );
+        assert!(
+            check(&junction.join("deletable"), root.path()).is_err(),
+            "the cleanup guard must reject a reparse-point ancestor"
+        );
+        std::fs::remove_dir(&junction).expect("remove only the junction, not its target");
     }
 
     #[test]
@@ -331,6 +356,34 @@ mod tests {
         // The exception is exactly these files, not their directory.
         let profile = home.path().join(".config/google-chrome/Default");
         assert!(check(&profile, home.path()).is_err());
+        std::env::remove_var("CHYSTIK_TEST_HOME");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_privacy_traces_are_deletable_from_the_privacy_view() {
+        let _env = crate::rules::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let home = tempdir().unwrap();
+        std::env::set_var("CHYSTIK_TEST_HOME", home.path());
+
+        for rel in [
+            "Library/Safari/History.db",
+            "Library/Application Support/Google/Chrome/Default/History",
+            "Library/Application Support/Google/Chrome/Default/Cookies",
+            "Library/Application Support/Chromium/Default/History",
+            "Library/Application Support/Chromium/Default/Cookies",
+        ] {
+            let path = home.path().join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, "activity record").unwrap();
+            assert!(
+                check(&path, home.path()).is_ok(),
+                "{rel} is listed by macOS Privacy but the guard refuses it"
+            );
+        }
+
         std::env::remove_var("CHYSTIK_TEST_HOME");
     }
 

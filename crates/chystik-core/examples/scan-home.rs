@@ -7,7 +7,6 @@
 //! ```
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
 
@@ -30,9 +29,7 @@ fn human(bytes: u64) -> String {
 }
 
 fn main() {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .expect("HOME must be set");
+    let home = chystik_core::platform::current().app_paths().home_dir;
     let (tx, _rx) = mpsc::channel();
     let cancel = std::sync::Arc::new(AtomicBool::new(false));
     let started = std::time::Instant::now();

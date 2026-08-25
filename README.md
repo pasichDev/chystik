@@ -4,7 +4,7 @@
 
 # Chystik
 
-**A disk-cleanup tool for Linux developers that knows what a directory *is*.**
+**A safety-first disk-cleanup tool that knows what a directory *is*.**
 
 [![CI](https://github.com/pasichDev/chystik/actions/workflows/ci.yml/badge.svg)](https://github.com/pasichDev/chystik/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -19,8 +19,8 @@ do not tell you that it is `~/.cache/go-build`, that Go rebuilds it on the next
 compile, and that deleting it costs you forty seconds. Chystik does.
 
 It classifies what it finds into fifteen categories, rates every item by what
-losing it actually costs, and moves what you choose to the desktop trash —
-never straight to `unlink`.
+losing it actually costs, and — where native-trash safety is verified — moves
+what you choose to the desktop trash, never straight to `unlink`.
 
 ## What it does
 
@@ -33,14 +33,19 @@ never straight to `unlink`.
   never included in a bulk selection.
 - **Refuses to do damage.** Every path passes through a guard before deletion:
   system directories, `.git`, `.ssh`, `.gnupg` and your settings are rejected
-  outright, symlinks are never followed, and the scan root itself is never
-  deletable.
-- **Trash-only.** Deletion goes through the XDG trash. Nothing is erased in
-  place, so every action is reversible from your file manager.
-- **Fast.** A full scan of `/` on a developer machine takes about a second:
+  outright, symlinks and Windows reparse points are never followed, and the
+  scan root itself is never deletable.
+- **Fail-closed cleanup.** Linux, macOS and Windows deletion go through their
+  native desktop recovery mechanisms. On a platform without a verified
+  native-trash adapter, cleanup is disabled rather than falling back to direct
+  deletion.
+- **Fast.** A full Linux scan of `/` on a developer machine takes about a second:
   a parallel `jwalk` walk that prunes a subtree as soon as it is classified,
   and skips pseudo, read-only and network mounts entirely.
 - **English and Ukrainian**, detected from your locale.
+
+See [platform support](docs/SUPPORT.md) for the current Linux/macOS/Windows
+capabilities and release status.
 
 ## Screenshot
 
@@ -70,7 +75,7 @@ To register the desktop entry and icons for your user:
 ./packaging/install.sh
 ```
 
-### Dependencies
+### Linux desktop dependencies
 
 On Debian/Ubuntu:
 
@@ -83,6 +88,66 @@ On Fedora:
 ```bash
 sudo dnf install gcc pkgconf-pkg-config gtk3-devel
 ```
+
+On Arch Linux:
+
+```bash
+sudo pacman -S --needed base-devel cargo pkgconf gtk3 libxkbcommon-x11
+```
+
+### Linux release artifacts
+
+Tagged releases publish x86_64 artifacts on GitHub Releases. Choose the format
+for your distribution; all three contain the same GUI and retain the same
+trash-only cleanup contract.
+
+Generic Linux desktops with a GTK-compatible X11 or Wayland session can use
+the AppImage:
+
+```bash
+chmod +x Chystik-<version>-x86_64.AppImage
+./Chystik-<version>-x86_64.AppImage
+```
+
+Debian and Ubuntu derivatives can install the Debian package:
+
+```bash
+sudo apt install ./chystik_<version>_amd64.deb
+```
+
+Fedora and RHEL-compatible distributions can install the RPM package:
+
+```bash
+sudo dnf install ./chystik-<version>-1.x86_64.rpm
+```
+
+Arch users can build the versioned source recipe in `packaging/arch`:
+
+```bash
+cd packaging/arch
+makepkg -si
+```
+
+The AppImage is a portable x86_64 release target, not a claim that every
+distribution, desktop environment, glibc version, or graphics stack is
+certified. See the support matrix for the tested environments and limitations.
+
+### Windows release artifacts
+
+Tagged releases also publish portable ZIP archives. Extract one archive and
+run `Chystik.exe`; no installer, administrator rights, or direct-delete mode
+is involved.
+
+```powershell
+Expand-Archive .\Chystik-<version>-windows-x86_64.zip -DestinationPath .\Chystik
+.\Chystik\Chystik.exe
+```
+
+`windows-x86_64` is the release target for 64-bit Windows 10 and Windows 11.
+`windows-aarch64` is the native ARM64 archive for Windows 11 on Arm. Archives
+are checksummed in `SHA256SUMS`; they are not code-signed yet, so Windows may
+show a SmartScreen warning. See the support matrix for the distinction between
+native CI evidence and a Windows 10 desktop acceptance run.
 
 ## Usage
 
@@ -113,9 +178,9 @@ This is a tool that deletes things, so the safety model is the product.
 | Rules | Only match paths a rule explicitly recognises. There is no "delete anything over N GB". |
 | Severity | Every match carries the cost of losing it; Risky is excluded from bulk selection. |
 | Size floor | Findings under 1 MiB are dropped, so the signal is not buried in noise. |
-| Guard | `chystik_core::guard::check` runs before every deletion and refuses protected prefixes, protected names, symlinks and anything outside the scan root. |
+| Guard | `chystik_core::guard::check` runs before every deletion and refuses platform-protected roots, protected names, symlinks and anything outside the scan root. |
 | Manifest | Nothing is deleted until you have seen the full list with per-item guard verdicts. |
-| Trash | Deletion is `trash::delete`, never `remove_dir_all`. |
+| Capability | `chystik_core::platform` enables native-trash cleanup only where its safety contract is verified; every other target is scan-only. |
 
 A crate-level test asserts that no rule can ever propose a path the guard
 refuses — the two cannot silently disagree.
@@ -133,6 +198,7 @@ Games · Media · Messengers · Cloud sync · Office · System junk
 
 ```
 crates/chystik-core     scanner, rules, severity, safety guard, reporting
+  src/platform/         target-selected host policy and capability seam
   src/rules/            one module per domain; see rules/mod.rs
   src/guard.rs          the last line of defence before any deletion
 crates/chystik-gui      the desktop application (egui/eframe)
