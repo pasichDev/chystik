@@ -14,7 +14,6 @@ pub(super) struct Windows;
 /// permanent-delete fallback. `FOF_ALLOWUNDO` alone is only best-effort;
 /// `FOFX_RECYCLEONDELETE` is the explicit Windows 8+ contract.
 pub(super) fn recycle_to_bin(path: &Path) -> Result<(), String> {
-    use std::os::windows::ffi::OsStrExt;
     use windows::core::PCWSTR;
     use windows::Win32::Foundation::RPC_E_CHANGED_MODE;
     use windows::Win32::System::Com::{
@@ -27,7 +26,7 @@ pub(super) fn recycle_to_bin(path: &Path) -> Result<(), String> {
 
     let canonical = std::fs::canonicalize(path)
         .map_err(|error| format!("resolve Windows recycle path {}: {error}", path.display()))?;
-    let wide: Vec<u16> = canonical.as_os_str().encode_wide().chain(Some(0)).collect();
+    let wide = shell_parsing_name(&canonical);
 
     // COM may already be initialized in a different apartment by the GUI.
     // That is safe to use; only balance CoUninitialize when this call itself
@@ -68,6 +67,23 @@ pub(super) fn recycle_to_bin(path: &Path) -> Result<(), String> {
         unsafe { CoUninitialize() };
     }
     result.map_err(|error| format!("move to Windows Recycle Bin: {error}"))
+}
+
+/// `std::fs::canonicalize` produces a verbatim `\\\\?\\` path on Windows.
+/// It is right for filesystem validation, but the Shell parser rejects that
+/// namespace prefix with `E_INVALIDARG`; pass the normal parsing name to
+/// `SHCreateItemFromParsingName` instead.
+fn shell_parsing_name(path: &Path) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+
+    let wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    const VERBATIM_PREFIX: [u16; 4] = [b'\\' as u16, b'\\' as u16, b'?' as u16, b'\\' as u16];
+    wide.strip_prefix(&VERBATIM_PREFIX)
+        .unwrap_or(&wide)
+        .iter()
+        .copied()
+        .chain(Some(0))
+        .collect()
 }
 
 impl Adapter for Windows {
@@ -312,6 +328,13 @@ mod tests {
         assert!(!has_protected_volume_component(Path::new(
             "C:\\Users\\chystik\\cache"
         )));
+    }
+
+    #[test]
+    fn shell_parser_name_removes_the_verbatim_prefix() {
+        let parsed = shell_parsing_name(Path::new(r"\\?\C:\Users\chystik\fixture.txt"));
+        let rendered = String::from_utf16(&parsed[..parsed.len() - 1]).unwrap();
+        assert_eq!(rendered, r"C:\Users\chystik\fixture.txt");
     }
 
     #[test]
