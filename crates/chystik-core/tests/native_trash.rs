@@ -46,13 +46,16 @@ mod native_trash {
         let target = root.path().join("recoverable-fixture.txt");
         std::fs::write(&target, "safe native Trash smoke-test fixture")
             .expect("write the disposable fixture");
+        let target_bytes = std::fs::metadata(&target)
+            .expect("stat the disposable fixture")
+            .len();
         #[cfg(target_os = "windows")]
         let before_recycle = recycle_bin_totals();
 
         let outcome = clean(
             &[CleanupItem {
                 path: target.clone(),
-                size_bytes: 41,
+                size_bytes: target_bytes,
                 scan_root: Some(root.path().to_path_buf()),
             }],
             &SystemTrash,
@@ -64,7 +67,7 @@ mod native_trash {
             "the native recycle operation was skipped: {:?}",
             outcome.skipped
         );
-        assert_eq!(outcome.freed_bytes, 41);
+        assert_eq!(outcome.freed_bytes, target_bytes);
         assert!(outcome.skipped.is_empty());
         assert!(
             !target.exists(),
@@ -82,7 +85,7 @@ mod native_trash {
             loop {
                 let after_recycle = recycle_bin_totals();
                 if after_recycle.0 >= before_recycle.0 + 1
-                    && after_recycle.1 >= before_recycle.1 + 41
+                    && after_recycle.1 >= before_recycle.1 + target_bytes as i64
                 {
                     break;
                 }
