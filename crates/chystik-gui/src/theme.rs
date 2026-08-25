@@ -276,7 +276,7 @@ pub(crate) fn app_mark(ctx: &egui::Context) -> Option<egui::TextureHandle> {
 
 pub(crate) fn app_icon() -> Option<egui::IconData> {
     const BYTES: &[u8] = include_bytes!("../../../assets/icon.png");
-    let mut image = image::load_from_memory(BYTES)
+    let image = image::load_from_memory(BYTES)
         .inspect_err(|e| eprintln!("[chystik] icon decode failed: {e}"))
         .ok()?
         .into_rgba8();
@@ -287,7 +287,7 @@ pub(crate) fn app_icon() -> Option<egui::IconData> {
     // Keep the shared asset unchanged and add platform-specific transparent
     // breathing room only to the native window/Dock icon.
     #[cfg(target_os = "macos")]
-    {
+    let image = {
         let (width, height) = image.dimensions();
         let inset = width.min(height) / 16;
         let resized = image::imageops::resize(
@@ -298,8 +298,8 @@ pub(crate) fn app_icon() -> Option<egui::IconData> {
         );
         let mut padded = image::RgbaImage::from_pixel(width, height, image::Rgba([0, 0, 0, 0]));
         image::imageops::overlay(&mut padded, &resized, i64::from(inset), i64::from(inset));
-        image = padded;
-    }
+        padded
+    };
 
     let (width, height) = image.dimensions();
     Some(egui::IconData {

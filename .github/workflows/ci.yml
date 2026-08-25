@@ -34,6 +34,9 @@ jobs:
       - name: Formatting
         run: cargo fmt --all --check
 
+      - name: Release version contract
+        run: bash packaging/linux/tests/version-contract.sh
+
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
@@ -41,6 +44,12 @@ jobs:
       # disagrees with the safety guard must never reach main.
       - name: Tests
         run: cargo test --workspace
+
+      - name: Native Linux Trash smoke
+        run: |
+          mkdir -p "$RUNNER_TEMP/chystik-trash-data"
+          XDG_DATA_HOME="$RUNNER_TEMP/chystik-trash-data" \
+            cargo test -p chystik-core --test native_trash -- --ignored --exact
 
       - name: Release build
         run: cargo build --workspace --release
@@ -63,14 +72,91 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       # Compile target-selected adapters and every test/example source on
-      # their native host. We deliberately do not run cleanup tests here:
-      # these targets are scan-only until native trash/reparse safety has
-      # hardware integration evidence.
+      # their native host. Windows remains scan-only; macOS additionally
+      # runs its native Trash evidence below.
       - name: Compile all targets
         run: cargo check --workspace --all-targets
 
       - name: Core safety tests
         run: cargo test -p chystik-core --lib
+
+      - name: Native macOS Trash smoke
+        if: matrix.os == 'macos-latest'
+        run: cargo test -p chystik-core --test native_trash -- --ignored --exact
+
+  linux-packages:
+    name: Linux packages and launch smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Package build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cpio desktop-file-utils file libgtk-3-dev libxkbcommon-dev libxkbcommon-x11-0 \
+            libwayland-dev patchelf pkg-config rpm xvfb zsync
+
+      - name: Package script contracts
+        run: |
+          bash packaging/linux/tests/stage-layout.sh
+          PACKAGING_TEST_RPM=1 bash packaging/linux/tests/native-packages.sh
+          bash packaging/linux/tests/appimage-builder.sh
+          bash packaging/linux/tests/arch-metadata.sh
+
+      - name: Build Linux release artifacts
+        run: |
+          mkdir -p "$RUNNER_TEMP/chystik-dist"
+          DIST_DIR="$RUNNER_TEMP/chystik-dist" bash packaging/linux/build-deb.sh
+          DIST_DIR="$RUNNER_TEMP/chystik-dist" bash packaging/linux/build-rpm.sh
+          DIST_DIR="$RUNNER_TEMP/chystik-dist" bash packaging/linux/build-appimage.sh
+          (cd "$RUNNER_TEMP/chystik-dist" && sha256sum -c ./*.sha256)
+
+      - name: Smoke packaged binaries
+        run: |
+          mkdir -p "$RUNNER_TEMP/chystik-extracted/deb" "$RUNNER_TEMP/chystik-extracted/rpm"
+          dpkg-deb -x "$RUNNER_TEMP/chystik-dist"/*.deb "$RUNNER_TEMP/chystik-extracted/deb"
+          rpm2cpio "$RUNNER_TEMP/chystik-dist"/*.rpm | (cd "$RUNNER_TEMP/chystik-extracted/rpm" && cpio -idm)
+          bash packaging/linux/smoke-launch.sh "$RUNNER_TEMP/chystik-extracted/deb/usr/bin/chystik-gui"
+          bash packaging/linux/smoke-launch.sh "$RUNNER_TEMP/chystik-extracted/rpm/usr/bin/chystik-gui"
+          bash packaging/linux/smoke-launch.sh "$RUNNER_TEMP/chystik-dist"/*.AppImage
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chystik-linux-pr-build
+          path: ${{ runner.temp }}/chystik-dist/
+          if-no-files-found: error
+
+  linux-runtime:
+    name: Linux runtime dependencies · ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Fedora
+            image: fedora:41
+            setup: dnf -y install cargo rust gcc git gtk3-devel libxkbcommon-x11 pkgconf-pkg-config
+          - name: Arch
+            image: archlinux:latest
+            setup: pacman -Syu --noconfirm --needed base-devel git gtk3 libx11 libxkbcommon mesa pkgconf rust
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compile against target runtime libraries
+        run: |
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/src" \
+            --workdir /src \
+            "${{ matrix.image }}" \
+            /bin/bash -ceu '${{ matrix.setup }}
+              cargo build --release --locked --package chystik-gui
+              ldd target/release/chystik-gui | grep -E "libgtk-3|libxkbcommon"'
 
   icon:
     name: icon assets are in sync

@@ -1,0 +1,32 @@
+# Maintainer note: replace SKIP with the release tarball SHA-256 before AUR publishing.
+pkgname=chystik
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Safety-first developer disk cleanup GUI'
+arch=('x86_64')
+url='https://github.com/pasichDev/chystik'
+license=('MIT')
+depends=('gtk3' 'libxkbcommon' 'libx11' 'mesa')
+makedepends=('cargo' 'pkgconf' 'gtk3')
+source=("https://github.com/pasichDev/chystik/archive/refs/tags/v${pkgver}.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+    cd "${srcdir}/${pkgname}-${pkgver}"
+    cargo build --release --locked --package chystik-gui
+}
+
+package() {
+    local icon size
+    cd "${srcdir}/${pkgname}-${pkgver}"
+
+    install -Dm755 target/release/chystik-gui "${pkgdir}/usr/bin/chystik-gui"
+    install -Dm644 packaging/chystik.desktop "${pkgdir}/usr/share/applications/chystik.desktop"
+    install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+    for icon in assets/icons/chystik-*.png; do
+        size="${icon##*-}"
+        size="${size%.png}"
+        install -Dm644 "$icon" "${pkgdir}/usr/share/icons/hicolor/${size}x${size}/apps/chystik.png"
+    done
+    install -Dm644 assets/icon.svg "${pkgdir}/usr/share/icons/hicolor/scalable/apps/chystik.svg"
+}

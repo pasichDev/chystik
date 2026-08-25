@@ -35,9 +35,9 @@ what you choose to the desktop trash, never straight to `unlink`.
   system directories, `.git`, `.ssh`, `.gnupg` and your settings are rejected
   outright, symlinks are never followed, and the scan root itself is never
   deletable.
-- **Fail-closed cleanup.** Linux deletion goes through desktop trash. On a
-  platform without a verified native-trash adapter, cleanup is disabled rather
-  than falling back to direct deletion.
+- **Fail-closed cleanup.** Linux and macOS deletion go through their native
+  desktop Trash. On a platform without a verified native-trash adapter,
+  cleanup is disabled rather than falling back to direct deletion.
 - **Fast.** A full Linux scan of `/` on a developer machine takes about a second:
   a parallel `jwalk` walk that prunes a subtree as soon as it is classified,
   and skips pseudo, read-only and network mounts entirely.
@@ -87,6 +87,49 @@ On Fedora:
 ```bash
 sudo dnf install gcc pkgconf-pkg-config gtk3-devel
 ```
+
+On Arch Linux:
+
+```bash
+sudo pacman -S --needed base-devel cargo pkgconf gtk3
+```
+
+### Linux release artifacts
+
+Tagged releases publish x86_64 artifacts on GitHub Releases. Choose the format
+for your distribution; all three contain the same GUI and retain the same
+trash-only cleanup contract.
+
+Generic Linux desktops with a GTK-compatible X11 or Wayland session can use
+the AppImage:
+
+```bash
+chmod +x Chystik-<version>-x86_64.AppImage
+./Chystik-<version>-x86_64.AppImage
+```
+
+Debian and Ubuntu derivatives can install the Debian package:
+
+```bash
+sudo apt install ./chystik_<version>_amd64.deb
+```
+
+Fedora and RHEL-compatible distributions can install the RPM package:
+
+```bash
+sudo dnf install ./chystik-<version>-1.x86_64.rpm
+```
+
+Arch users can build the versioned source recipe in `packaging/arch`:
+
+```bash
+cd packaging/arch
+makepkg -si
+```
+
+The AppImage is a portable x86_64 release target, not a claim that every
+distribution, desktop environment, glibc version, or graphics stack is
+certified. See the support matrix for the tested environments and limitations.
 
 ## Usage
 

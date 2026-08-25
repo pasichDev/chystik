@@ -480,4 +480,26 @@ mod tests {
             drives.iter().map(|d| d.size_bytes).sum::<u64>()
         );
     }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_disks_include_the_mounted_root_volume() {
+        let drives = drives();
+        let root = drives
+            .iter()
+            .flat_map(|drive| drive.partitions.iter())
+            .find(|partition| {
+                matches!(
+                    &partition.usage,
+                    PartitionUse::Filesystem(mount) if mount.mount_point == std::path::Path::new("/")
+                )
+            })
+            .expect("the macOS mounted-volume fallback must expose root");
+
+        assert!(root.size_bytes > 0);
+        assert!(root
+            .mount
+            .as_ref()
+            .is_some_and(|mount| mount.free_bytes <= mount.total_bytes));
+    }
 }

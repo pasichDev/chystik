@@ -331,6 +331,34 @@ mod tests {
         std::env::remove_var("CHYSTIK_TEST_HOME");
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_privacy_traces_are_deletable_from_the_privacy_view() {
+        let _env = crate::rules::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let home = tempdir().unwrap();
+        std::env::set_var("CHYSTIK_TEST_HOME", home.path());
+
+        for rel in [
+            "Library/Safari/History.db",
+            "Library/Application Support/Google/Chrome/Default/History",
+            "Library/Application Support/Google/Chrome/Default/Cookies",
+            "Library/Application Support/Chromium/Default/History",
+            "Library/Application Support/Chromium/Default/Cookies",
+        ] {
+            let path = home.path().join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, "activity record").unwrap();
+            assert!(
+                check(&path, home.path()).is_ok(),
+                "{rel} is listed by macOS Privacy but the guard refuses it"
+            );
+        }
+
+        std::env::remove_var("CHYSTIK_TEST_HOME");
+    }
+
     #[test]
     fn rejects_opt_installed_applications() {
         assert!(check(Path::new("/opt/android-studio"), Path::new("/")).is_err());

@@ -914,6 +914,12 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_native_trash_capability_enables_gui_cleanup_actions() {
+        assert!(ChystikApp::default().cleanup_available());
+    }
+
     /// Pressing Scan a second time used to panic.
     ///
     /// The frame order is poll → `ensure_view` → panels, and the Scan button

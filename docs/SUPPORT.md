@@ -7,8 +7,8 @@ roots, allocated-byte accounting and cleanup capability. No frontend reads
 
 | Platform | Scan | Cleanup | Artifact / evidence |
 |---|---|---|---|
-| Linux | Supported | Supported through native desktop trash | Linux CI runs formatting, clippy, unit tests, deletion integration tests and release build. |
-| macOS | Preview | Supported through native Trash | Native `cargo check --all-targets` on macOS CI; cleanup uses macOS's Trash API. No signed/notarized app artifact yet. |
+| Linux x86_64 | Supported | Supported through native desktop trash | PR CI builds and smoke-tests AppImage, `.deb`, and `.rpm`; Ubuntu, Fedora, and Arch build/runtime dependencies are checked separately. |
+| macOS | Preview | Supported through native Trash | Native macOS CI compiles and tests the Trash flow. No signed/notarized app artifact yet. |
 | Windows | Preview | Disabled (scan-only) | Native `cargo check --all-targets` on Windows CI. No signed installer yet. |
 | Other | Unsupported | Disabled (scan-only) | Builds retain a conservative fallback adapter. |
 
@@ -48,10 +48,40 @@ platform adapter  →  scanner / rules  →  findings  →  GUI or future CLI
   platform capability requires an adapter and target-native evidence; it does
   not add `cfg` branches to the GUI, CLI or rules.
 
-## Releases
+## Linux distribution contract
 
-The current desktop installer and `.desktop` integration are Linux-only.
-Portable Linux, macOS and Windows distributable artifacts are a release-work
-slice after native compile coverage: they require signing/notarization policy,
-per-platform smoke hardware and an update/rollback design. Source builds may
-be used for scan preview where the native compile CI is green.
+Linux releases target x86_64 only for now. The project builds four distribution
+paths from one staging tree:
+
+| Audience | Distribution path | Evidence |
+|---|---|---|
+| Generic Linux desktop | `Chystik-<version>-x86_64.AppImage` | Bundled with pinned linuxdeploy + GTK plugin; launched in an empty fixture home under Xvfb. |
+| Debian / Ubuntu | `chystik_<version>_amd64.deb` | `dpkg-deb` metadata, extraction, and fixture-home launch smoke. |
+| Fedora / RHEL compatible | `chystik-<version>-1.x86_64.rpm` | `rpmbuild` metadata, extraction, and fixture-home launch smoke. |
+| Arch | `packaging/arch/PKGBUILD` source recipe | Arch container compiles the GUI with GTK dependencies; AUR publication requires a maintainer and a release-tarball checksum. |
+
+Ubuntu, Fedora, and Arch CI checks compile the GUI against their GTK/runtime
+dependencies. This is deliberately narrower than “every Linux distribution”:
+unlisted distributions, old glibc releases, non-x86_64 machines, exotic
+desktop sessions, disconnected mounts, and nonstandard trash backends are not
+certified merely because an artifact starts there.
+
+The existing `packaging/install.sh` remains the source-tree desktop installer.
+Release packages include the same desktop entry, hicolor icons, binary, and
+MIT license without requiring root at runtime.
+
+## Release and rollback policy
+
+A stable tag matching the exact Cargo version — for example `v0.1.0` for
+`version = "0.1.0"` — starts the Linux release workflow. It rejects version
+mismatches before building, then validates every artifact and creates the
+matching GitHub Release with the AppImage, its SHA-256 sidecar, the `.deb`,
+and the `.rpm`. Manual workflow runs upload review artifacts only; they do
+not publish a release.
+
+If an artifact is wrong, remove that release asset and its checksum reference,
+mark the release as a bad build, fix the source, then publish a new tag. The
+workflow never overwrites an existing asset silently. Never advise users to
+delete files outside their desktop trash as part of recovery. Arch maintainers
+must replace the PKGBUILD `SKIP` checksum with the published tag archive
+checksum before AUR publication.
