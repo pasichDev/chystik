@@ -7,10 +7,10 @@ roots, allocated-byte accounting and cleanup capability. No frontend reads
 
 | Platform | Scan | Cleanup | Artifact / evidence |
 |---|---|---|---|
-| Linux x86_64 | Supported | Supported through native desktop trash | PR CI builds and smoke-tests AppImage, `.deb`, and `.rpm`; Ubuntu, Fedora, and Arch build/runtime dependencies are checked separately. |
-| macOS | Preview | Supported through native Trash | Native macOS CI compiles and tests the Trash flow. No signed/notarized app artifact yet. |
-| Windows 10/11 x64 | Preview | Supported through native Recycle Bin | Windows x64 CI runs guard/junction and Recycle Bin item/byte evidence; tags build a portable ZIP. Hosted CI is Windows Server 2022, so a real Windows 10 desktop acceptance run remains required. |
-| Windows 11 ARM64 | Preview | Supported through native Recycle Bin | Native Windows 11 Arm runner builds, tests, and publishes a portable ARM64 ZIP. No signed installer yet. |
+| Linux x86_64 | Supported | Supported through native desktop trash | PR CI builds the GUI and `chystik` CLI, stages generated man/completions, and smoke-tests AppImage, `.deb`, and `.rpm`; Ubuntu, Fedora, and Arch build/runtime dependencies are checked separately. |
+| macOS | Preview | Supported through native Trash | Native macOS CI compiles both frontends and tests the Trash flow. No signed/notarized app artifact yet. |
+| Windows 10/11 x64 | Preview | Supported through native Recycle Bin | Windows x64 CI compiles both frontends, runs guard/junction and Recycle Bin item/byte evidence; tags build a portable ZIP containing `Chystik-GUI.exe` and `chystik.exe`. Hosted CI is Windows Server 2022, so a real Windows 10 desktop acceptance run remains required. |
+| Windows 11 ARM64 | Preview | Supported through native Recycle Bin | Native Windows 11 Arm runner builds/tests both frontends and publishes the same two-binary portable ARM64 ZIP. No signed installer yet. |
 | Other | Unsupported | Disabled (scan-only) | Builds retain a conservative fallback adapter. |
 
 ## Why cleanup is intentionally asymmetric
@@ -41,7 +41,7 @@ certificate and installer policy are introduced.
 ## Extension boundary
 
 ```text
-platform adapter  →  scanner / rules  →  findings  →  GUI or future CLI
+platform adapter  →  scanner / rules  →  findings  →  GUI or CLI
                          │                  │
                          └── guard → cleaner ┘
                                (safety authority)
@@ -49,9 +49,9 @@ platform adapter  →  scanner / rules  →  findings  →  GUI or future CLI
                          future classifier may rank only
 ```
 
-- The rule engine, severity model, guard and cleaner are deterministic shared
-  core. GUI and the future CLI must call them, not reimplement their own scan
-  or delete behavior.
+- The rule engine, shared application service, severity model, guard and
+  cleaner are deterministic core. GUI and CLI call them rather than
+  reimplementing scan roots, exclusions, cleanup manifests, or deletion.
 - A future local classifier receives `Finding` data to rank or explain. It
   cannot make an unsafe item actionable, modify guard decisions, or call a
   remover.
@@ -89,20 +89,23 @@ paths from one staging tree:
 
 | Audience | Distribution path | Evidence |
 |---|---|---|
-| Generic Linux desktop | `Chystik-<version>-x86_64.AppImage` | Bundled with pinned linuxdeploy + GTK plugin; launched in an empty fixture home under Xvfb. |
-| Debian / Ubuntu | `chystik_<version>_amd64.deb` | `dpkg-deb` metadata, extraction, and fixture-home launch smoke. |
-| Fedora / RHEL compatible | `chystik-<version>-1.x86_64.rpm` | `rpmbuild` metadata, extraction, and fixture-home launch smoke. |
-| Arch | `packaging/arch/PKGBUILD` source recipe | Arch container compiles the GUI with GTK dependencies; AUR publication requires a maintainer and a release-tarball checksum. |
+| Generic Linux desktop | `Chystik-<version>-x86_64.AppImage` | Bundled with pinned linuxdeploy + GTK plugin; the staged tree also contains the CLI. |
+| Debian / Ubuntu | `chystik_<version>_amd64.deb` | `dpkg-deb` metadata, extraction, GUI launch smoke, `chystik`, generated man page, and completion files. |
+| Fedora / RHEL compatible | `chystik-<version>-1.x86_64.rpm` | `rpmbuild` metadata, extraction, GUI launch smoke, `chystik`, generated man page, and completion files. |
+| Arch | `packaging/arch/PKGBUILD` source recipe | Arch container compiles both frontends; AUR publication requires a maintainer and a release-tarball checksum. |
 
 Ubuntu, Fedora, and Arch CI checks compile the GUI against their GTK/runtime
-dependencies. This is deliberately narrower than “every Linux distribution”:
+dependencies and compile the CLI from the same workspace. This is deliberately
+narrower than “every Linux distribution”:
 unlisted distributions, old glibc releases, non-x86_64 machines, exotic
 desktop sessions, disconnected mounts, and nonstandard trash backends are not
 certified merely because an artifact starts there.
 
-The existing `packaging/install.sh` remains the source-tree desktop installer.
-Release packages include the same desktop entry, hicolor icons, binary, and
-MIT license without requiring root at runtime.
+The existing `packaging/install.sh` installs both source-built binaries into
+`~/.local/bin` and retains the desktop-entry/icon setup. Release packages
+include both binaries, CLI reference assets where the package format supports
+them, the desktop entry, hicolor icons, and MIT license without requiring root
+at runtime.
 
 ## Release and rollback policy
 

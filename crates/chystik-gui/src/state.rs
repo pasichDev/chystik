@@ -166,28 +166,6 @@ pub(crate) fn default_roots(disks: &[StorageVolume]) -> Vec<PathBuf> {
     chosen
 }
 
-/// Drop roots nested inside (or equal to) another root, shortest first, so a
-/// scan never walks the same subtree twice.
-pub(crate) fn dedup_nested_roots(roots: &mut Vec<PathBuf>) {
-    roots.sort_by_key(|p| p.as_os_str().len());
-    let mut kept: Vec<PathBuf> = Vec::new();
-    for r in roots.drain(..) {
-        if !kept.iter().any(|k| r.starts_with(k)) {
-            kept.push(r);
-        }
-    }
-    *roots = kept;
-}
-
-/// Longest root in `roots` that is a directory-prefix of `path`.
-pub(crate) fn longest_containing<'a>(roots: &[&'a Path], path: &Path) -> Option<&'a Path> {
-    roots
-        .iter()
-        .copied()
-        .filter(|r| path.starts_with(*r))
-        .max_by_key(|r| r.as_os_str().len())
-}
-
 /// Case-insensitive substring filter applied to finding paths, split from
 /// the app struct so the hot rebuild path can reuse one lowered needle.
 pub(crate) fn matches_filter(
@@ -307,35 +285,6 @@ mod tests {
         let disks = vec![disk("/home", 1, 1), disk("/home/dev", 1, 1)];
         assert_eq!(default_roots(&disks), vec![PathBuf::from("/home")]);
         assert!(default_roots(&[]).is_empty());
-    }
-
-    #[test]
-    fn dedup_nested_roots_removes_children_and_duplicates() {
-        let mut roots = vec![
-            PathBuf::from("/a/inner"),
-            PathBuf::from("/a"),
-            PathBuf::from("/a"),
-            PathBuf::from("/b"),
-        ];
-        dedup_nested_roots(&mut roots);
-        assert_eq!(roots, vec![PathBuf::from("/a"), PathBuf::from("/b")]);
-    }
-
-    #[test]
-    fn longest_containing_prefers_deepest_match() {
-        let a = PathBuf::from("/");
-        let b = PathBuf::from("/home");
-        let c = PathBuf::from("/home/dev");
-        let refs = [a.as_path(), b.as_path(), c.as_path()];
-        assert_eq!(
-            longest_containing(&refs, Path::new("/home/dev/x")),
-            Some(c.as_path())
-        );
-        assert_eq!(
-            longest_containing(&refs, Path::new("/etc")),
-            Some(a.as_path())
-        );
-        assert_eq!(longest_containing(&refs, Path::new("rel/path")), None);
     }
 }
 

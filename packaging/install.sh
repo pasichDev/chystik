@@ -7,6 +7,16 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 app_dir="${HOME}/.local/share/applications"
 icon_root="${HOME}/.local/share/icons/hicolor"
+bin_dir="${HOME}/.local/bin"
+
+for binary in chystik chystik-gui; do
+    source_binary="$repo_root/target/release/$binary"
+    if [[ ! -x "$source_binary" ]]; then
+        echo "missing $source_binary; run cargo build --release first" >&2
+        exit 1
+    fi
+    install -Dm755 "$source_binary" "$bin_dir/$binary"
+done
 
 mkdir -p "$app_dir"
 cp "$repo_root/packaging/chystik.desktop" "$app_dir/"
@@ -34,5 +44,5 @@ command -v gtk-update-icon-cache >/dev/null 2>&1 && \
     gtk-update-icon-cache -q -t -f "$icon_root" || true
 command -v kbuildsycoca6 >/dev/null 2>&1 && kbuildsycoca6 --noincremental || true
 
-echo "Installed desktop entry and $(ls "$repo_root"/assets/icons/chystik-*.png | wc -l) icon sizes."
+echo "Installed chystik CLI, chystik-gui, desktop entry and $(ls "$repo_root"/assets/icons/chystik-*.png | wc -l) icon sizes."
 echo "If the launcher does not show it yet, log out and back in."

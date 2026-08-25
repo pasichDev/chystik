@@ -1,91 +1,41 @@
-//! Paths the user has marked never-touch.
+//! GUI adapter for the shared never-touch policy.
 //!
-//! For a tool that deletes, "leave this alone" is not a convenience — it is
-//! what makes the bulk actions usable at all. Without it a careful user
-//! never presses *Select all safe*, and the whole category workflow is dead
-//! weight.
-//!
-//! Enforced twice, deliberately. The scanner prunes excluded trees so they
-//! are never classified or shown, and `filter` runs again on the deletion
-//! path in case a finding predates the exclusion.
-//!
-//! Stored beside the consent record in the platform-owned app config directory.
+//! Core owns persistence and normalization so the CLI cannot accidentally
+//! scan a path that the desktop frontend previously marked as excluded.
 
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
-
-#[derive(Serialize, Deserialize, Debug, Default, PartialEq)]
-pub(crate) struct Exclusions {
-    pub paths: Vec<PathBuf>,
-}
-
-fn exclusions_path() -> PathBuf {
-    chystik_core::platform::current()
-        .app_paths()
-        .config_dir
-        .join("exclusions.json")
-}
-
-/// Load the list. Any read or parse failure yields an empty list: an
-/// unreadable file must not silently un-exclude anything, so the caller is
-/// told through the returned `bool`.
 pub(crate) fn load() -> (Vec<PathBuf>, bool) {
-    let path = exclusions_path();
-    match std::fs::read_to_string(&path) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (Vec::new(), true),
-        Err(e) => {
-            eprintln!("[chystik] cannot read {}: {e}", path.display());
+    let store = chystik_core::config::ConfigStore::default();
+    match store.load() {
+        Ok(config) => (config.exclusions, true),
+        Err(error) => {
+            eprintln!("[chystik] cannot read {}: {error}", store.path().display());
             (Vec::new(), false)
         }
-        Ok(text) => match serde_json::from_str::<Exclusions>(&text) {
-            Ok(list) => (normalise(list.paths), true),
-            Err(e) => {
-                eprintln!("[chystik] {} is malformed: {e}", path.display());
-                (Vec::new(), false)
-            }
-        },
     }
 }
 
 pub(crate) fn save(paths: &[PathBuf]) {
-    let path = exclusions_path();
-    let record = Exclusions {
-        paths: paths.to_vec(),
-    };
-    let write = path
-        .parent()
-        .ok_or_else(|| std::io::Error::other("exclusions path has no parent"))
-        .and_then(std::fs::create_dir_all)
-        .and_then(|()| {
-            let json = serde_json::to_string_pretty(&record)
-                .map_err(|e| std::io::Error::other(e.to_string()))?;
-            std::fs::write(&path, json)
-        });
-    if let Err(e) = write {
-        eprintln!("[chystik] could not save exclusions: {e}");
+    let store = chystik_core::config::ConfigStore::default();
+    let write = store.load().and_then(|mut config| {
+        config.exclusions = normalise(paths.to_vec());
+        store.save(&config)
+    });
+    if let Err(error) = write {
+        eprintln!(
+            "[chystik] could not save exclusions at {}: {error}",
+            store.path().display()
+        );
     }
 }
 
-/// Drop duplicates and any path already covered by a shorter one, so the
-/// list stays the smallest set that means the same thing.
-pub(crate) fn normalise(mut paths: Vec<PathBuf>) -> Vec<PathBuf> {
-    paths.sort();
-    paths.dedup();
-    paths.sort_by_key(|p| p.as_os_str().len());
-    let mut kept: Vec<PathBuf> = Vec::new();
-    for path in paths {
-        if !kept.iter().any(|k| path.starts_with(k)) {
-            kept.push(path);
-        }
-    }
-    kept.sort();
-    kept
+pub(crate) fn normalise(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    chystik_core::config::normalize_exclusions(paths)
 }
 
-/// True if `path` is excluded — itself or anything under an excluded root.
 pub(crate) fn is_excluded(path: &Path, exclusions: &[PathBuf]) -> bool {
-    exclusions.iter().any(|e| path.starts_with(e))
+    exclusions.iter().any(|root| path.starts_with(root))
 }
 
 #[cfg(test)]
@@ -119,30 +69,5 @@ mod tests {
         ));
         assert!(!is_excluded(Path::new("/home/u/repository"), &list));
         assert!(!is_excluded(Path::new("/home/u/other"), &list));
-    }
-
-    #[test]
-    fn an_empty_list_excludes_nothing() {
-        assert!(!is_excluded(Path::new("/anything"), &[]));
-    }
-
-    #[test]
-    fn exclusions_round_trip_through_json() {
-        let record = Exclusions {
-            paths: vec![PathBuf::from("/home/u/repo")],
-        };
-        let json = serde_json::to_string(&record).unwrap();
-        assert_eq!(serde_json::from_str::<Exclusions>(&json).unwrap(), record);
-    }
-
-    #[test]
-    fn exclusions_path_uses_the_core_platform_config_directory() {
-        assert_eq!(
-            exclusions_path(),
-            chystik_core::platform::current()
-                .app_paths()
-                .config_dir
-                .join("exclusions.json")
-        );
     }
 }

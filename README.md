@@ -67,7 +67,7 @@ cd chystik
 cargo build --release
 ```
 
-The binary lands at `target/release/chystik-gui`.
+The binaries land at `target/release/chystik-gui` and `target/release/chystik`.
 
 To register the desktop entry and icons for your user:
 
@@ -98,8 +98,9 @@ sudo pacman -S --needed base-devel cargo pkgconf gtk3 libxkbcommon-x11
 ### Linux release artifacts
 
 Tagged releases publish x86_64 artifacts on GitHub Releases. Choose the format
-for your distribution; all three contain the same GUI and retain the same
-trash-only cleanup contract.
+for your distribution; all three contain the GUI, `chystik` CLI, generated
+manual/completions where the format supports them, and the same trash-only
+cleanup contract.
 
 Generic Linux desktops with a GTK-compatible X11 or Wayland session can use
 the AppImage:
@@ -135,12 +136,13 @@ certified. See the support matrix for the tested environments and limitations.
 ### Windows release artifacts
 
 Tagged releases also publish portable ZIP archives. Extract one archive and
-run `Chystik.exe`; no installer, administrator rights, or direct-delete mode
-is involved.
+run `Chystik-GUI.exe` for the desktop app or `chystik.exe` for the terminal;
+no installer, administrator rights, or direct-delete mode is involved.
 
 ```powershell
 Expand-Archive .\Chystik-<version>-windows-x86_64.zip -DestinationPath .\Chystik
-.\Chystik\Chystik.exe
+.\Chystik\Chystik-GUI.exe
+.\Chystik\chystik.exe scan --safe
 ```
 
 `windows-x86_64` is the release target for 64-bit Windows 10 and Windows 11.
@@ -164,10 +166,15 @@ Keyboard: `/` focuses the filter, `Esc` closes a dialog, `Enter` confirms one.
 ### Command line
 
 ```
-chystik-gui              # normal launch
-CHYSTIK_AUTOSCAN=1 …     # start a scan immediately (headless smoke testing)
-LANG=uk_UA.UTF-8 …       # force a language
+chystik-gui                       # normal launch
+chystik scan --safe               # read-only terminal scan
+chystik clean . --safe --dry-run  # inspect a safe cleanup manifest
+CHYSTIK_AUTOSCAN=1 …              # start GUI scan immediately (headless smoke testing)
+LANG=uk_UA.UTF-8 …                # force GUI language
 ```
+
+See [CLI reference](docs/CLI.md) for JSON/JSONL contracts, confirmation
+policy, exit codes, completions, and `chystik(1)`.
 
 ## Safety model
 
@@ -201,6 +208,9 @@ crates/chystik-core     scanner, rules, severity, safety guard, reporting
   src/platform/         target-selected host policy and capability seam
   src/rules/            one module per domain; see rules/mod.rs
   src/guard.rs          the last line of defence before any deletion
+  src/app.rs            shared roots, filters, manifests and cleanup plans
+  src/config.rs         versioned consent and never-touch policy
+crates/chystik-cli      scriptable frontend, JSON/JSONL, completions and man
 crates/chystik-gui      the desktop application (egui/eframe)
   src/panels.rs         window regions
   src/modals.rs         dialogs, including the first-run risk acknowledgement

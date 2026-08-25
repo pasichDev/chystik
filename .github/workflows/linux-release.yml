@@ -64,6 +64,8 @@ jobs:
           rpm2cpio "$RUNNER_TEMP/chystik-dist"/*.rpm | (cd "$RUNNER_TEMP/chystik-extracted/rpm" && cpio -idm)
           bash packaging/linux/smoke-launch.sh "$RUNNER_TEMP/chystik-extracted/deb/usr/bin/chystik-gui"
           bash packaging/linux/smoke-launch.sh "$RUNNER_TEMP/chystik-extracted/rpm/usr/bin/chystik-gui"
+          bash packaging/linux/smoke-cli.sh "$RUNNER_TEMP/chystik-extracted/deb/usr/bin/chystik"
+          bash packaging/linux/smoke-cli.sh "$RUNNER_TEMP/chystik-extracted/rpm/usr/bin/chystik"
           bash packaging/linux/smoke-launch.sh "$RUNNER_TEMP/chystik-dist"/*.AppImage
 
       - uses: actions/upload-artifact@v4
@@ -107,6 +109,7 @@ jobs:
         run: |
           cargo test -p chystik-core --lib
           cargo test -p chystik-core --test native_trash -- --ignored --exact
+          cargo test -p chystik-cli --test cli clean_safe_yes_moves_only_eligible_paths_to_native_trash -- --ignored --exact
 
       - name: Build portable archive
         shell: pwsh
@@ -117,11 +120,12 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $version = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"').Matches[0].Groups[1].Value
           if (-not $version) { throw 'could not read workspace version' }
-          cargo build --locked --release --package chystik-gui --target $env:CHYSTIK_TARGET
+          cargo build --locked --release --package chystik-gui --package chystik-cli --target $env:CHYSTIK_TARGET
           $dist = Join-Path $env:RUNNER_TEMP 'chystik-windows-dist'
           $stage = Join-Path $dist "Chystik-$version-windows-$env:CHYSTIK_ASSET"
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
-          Copy-Item "target/$env:CHYSTIK_TARGET/release/chystik-gui.exe" (Join-Path $stage 'Chystik.exe')
+          Copy-Item "target/$env:CHYSTIK_TARGET/release/chystik-gui.exe" (Join-Path $stage 'Chystik-GUI.exe')
+          Copy-Item "target/$env:CHYSTIK_TARGET/release/chystik.exe" (Join-Path $stage 'chystik.exe')
           Copy-Item LICENSE, README.md -Destination $stage
           $archive = Join-Path $dist "Chystik-$version-windows-$env:CHYSTIK_ASSET.zip"
           Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $archive -Force

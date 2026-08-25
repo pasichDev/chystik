@@ -11,8 +11,10 @@
 //! - `privacy` — traces of what you did, measured by what they reveal
 
 pub mod advisories;
+pub mod app;
 pub mod blockdev;
 pub mod cleaner;
+pub mod config;
 pub mod disks;
 pub mod guard;
 pub mod model;

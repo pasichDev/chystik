@@ -88,6 +88,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/chystik-trash-data"
           XDG_DATA_HOME="$RUNNER_TEMP/chystik-trash-data" \
             cargo test -p chystik-core --test native_trash -- --ignored --exact
+          cargo test -p chystik-cli --test cli clean_safe_yes_moves_only_eligible_paths_to_native_trash -- --ignored --exact
 
   platform-compile:
     name: native platform · ${{ matrix.name }}
@@ -126,7 +127,9 @@ jobs:
 
       - name: Native Trash / Recycle Bin smoke
         if: matrix.native_trash
-        run: cargo test -p chystik-core --test native_trash -- --ignored --exact
+        run: |
+          cargo test -p chystik-core --test native_trash -- --ignored --exact
+          cargo test -p chystik-cli --test cli clean_safe_yes_moves_only_eligible_paths_to_native_trash -- --ignored --exact
 
   linux-packages:
     name: Linux packages and launch smoke
@@ -168,6 +171,8 @@ jobs:
           rpm2cpio "$RUNNER_TEMP/chystik-dist"/*.rpm | (cd "$RUNNER_TEMP/chystik-extracted/rpm" && cpio -idm)
           bash packaging/linux/smoke-launch.sh "$RUNNER_TEMP/chystik-extracted/deb/usr/bin/chystik-gui"
           bash packaging/linux/smoke-launch.sh "$RUNNER_TEMP/chystik-extracted/rpm/usr/bin/chystik-gui"
+          bash packaging/linux/smoke-cli.sh "$RUNNER_TEMP/chystik-extracted/deb/usr/bin/chystik"
+          bash packaging/linux/smoke-cli.sh "$RUNNER_TEMP/chystik-extracted/rpm/usr/bin/chystik"
           bash packaging/linux/smoke-launch.sh "$RUNNER_TEMP/chystik-dist"/*.AppImage
 
   linux-runtime:
@@ -195,7 +200,7 @@ jobs:
             --workdir /src \
             "${{ matrix.image }}" \
             /bin/bash -ceu '${{ matrix.setup }}
-              cargo build --release --locked --package chystik-gui
+              cargo build --release --locked --package chystik-gui --package chystik-cli
               ${{ matrix.runtime_check }}'
 
   icon:
