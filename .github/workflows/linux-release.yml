@@ -3,7 +3,6 @@ name: Release artifacts
 on:
   push:
     tags: ['v*']
-  workflow_dispatch:
 
 permissions:
   contents: write
@@ -26,16 +25,10 @@ jobs:
 
       - name: Verify release version and notes
         run: |
-          if [[ "$GITHUB_REF_TYPE" == 'tag' ]]; then
-            bash packaging/linux/verify-version.sh "$GITHUB_REF_NAME"
-            bash packaging/linux/release-notes.sh "$GITHUB_REF_NAME" > "$RUNNER_TEMP/release-notes.md"
-          else
-            bash packaging/linux/verify-version.sh
-            bash packaging/linux/release-notes.sh > "$RUNNER_TEMP/release-notes.md"
-          fi
+          bash packaging/linux/verify-version.sh "$GITHUB_REF_NAME"
+          bash packaging/linux/release-notes.sh "$GITHUB_REF_NAME" > "$RUNNER_TEMP/release-notes.md"
 
       - name: Verify tagged commit is on main
-        if: github.ref_type == 'tag'
         run: |
           git fetch --no-tags origin main:refs/remotes/origin/main
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main
@@ -143,7 +136,6 @@ jobs:
   publish:
     name: Publish tagged release
     needs: [validate, linux, windows]
-    if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -4,7 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -34,7 +33,7 @@ jobs:
       - name: Formatting
         run: cargo fmt --all --check
 
-      - name: Release version contract
+      - name: Version and changelog contract
         run: |
           bash packaging/linux/tests/version-contract.sh
           bash packaging/linux/tests/release-notes.sh
@@ -52,9 +51,6 @@ jobs:
           mkdir -p "$RUNNER_TEMP/chystik-trash-data"
           XDG_DATA_HOME="$RUNNER_TEMP/chystik-trash-data" \
             cargo test -p chystik-core --test native_trash -- --ignored --exact
-
-      - name: Release build
-        run: cargo build --workspace --release
 
   platform-compile:
     name: native platform · ${{ matrix.name }}
@@ -120,7 +116,7 @@ jobs:
           bash packaging/linux/tests/appimage-builder.sh
           bash packaging/linux/tests/arch-metadata.sh
 
-      - name: Build Linux release artifacts
+      - name: Build Linux packages for smoke tests
         run: |
           mkdir -p "$RUNNER_TEMP/chystik-dist"
           DIST_DIR="$RUNNER_TEMP/chystik-dist" bash packaging/linux/build-deb.sh
@@ -136,12 +132,6 @@ jobs:
           bash packaging/linux/smoke-launch.sh "$RUNNER_TEMP/chystik-extracted/deb/usr/bin/chystik-gui"
           bash packaging/linux/smoke-launch.sh "$RUNNER_TEMP/chystik-extracted/rpm/usr/bin/chystik-gui"
           bash packaging/linux/smoke-launch.sh "$RUNNER_TEMP/chystik-dist"/*.AppImage
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: chystik-linux-pr-build
-          path: ${{ runner.temp }}/chystik-dist/
-          if-no-files-found: error
 
   linux-runtime:
     name: Linux runtime dependencies · ${{ matrix.name }}
