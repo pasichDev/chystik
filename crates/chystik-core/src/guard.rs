@@ -167,7 +167,13 @@ pub fn is_scannable(dir: &Path) -> bool {
 mod tests {
     use super::*;
     use std::path::PathBuf;
-    use tempfile::tempdir;
+
+    /// Keep guard fixtures outside macOS's protected `/var` temporary tree.
+    fn tempdir() -> std::io::Result<tempfile::TempDir> {
+        tempfile::Builder::new()
+            .prefix(".chystik-test-")
+            .tempdir_in(std::env::current_dir().expect("test process has a working directory"))
+    }
 
     #[test]
     fn accepts_regular_child_of_scan_root() {

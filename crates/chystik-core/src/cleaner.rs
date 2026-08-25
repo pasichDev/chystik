@@ -237,7 +237,21 @@ fn clean_with_support(
 mod tests {
     use super::*;
     use std::sync::Mutex;
-    use tempfile::tempdir;
+
+    /// macOS puts the default temporary directory below `/var`, which the
+    /// production guard correctly treats as a protected system location.
+    /// Safety fixtures need a user-writable, non-system root on every host.
+    fn tempdir() -> std::io::Result<tempfile::TempDir> {
+        tempfile::Builder::new()
+            .prefix(".chystik-test-")
+            .tempdir_in(std::env::current_dir().expect("test process has a working directory"))
+    }
+
+    /// Exercise the portable validate/identity/remover flow without claiming
+    /// that the current host has a native recovery mechanism.
+    fn clean_with_native_trash(items: &[CleanupItem], remover: &dyn Remover) -> CleanupOutcome {
+        clean_with_support(items, remover, CleanupSupport::NativeTrash)
+    }
 
     /// Records what it was asked to remove and leaves the disk alone.
     #[derive(Default)]
@@ -280,7 +294,7 @@ mod tests {
         std::fs::create_dir_all(&b).unwrap();
 
         let remover = FakeRemover::default();
-        let outcome = clean(
+        let outcome = clean_with_native_trash(
             &[item(&a, root.path(), 100), item(&b, root.path(), 250)],
             &remover,
         );
@@ -318,6 +332,26 @@ mod tests {
 
     #[cfg(not(target_os = "linux"))]
     #[test]
+    fn current_scan_only_platform_never_hands_a_path_to_the_remover() {
+        let root = tempdir().unwrap();
+        let target = root.path().join("cache");
+        std::fs::create_dir_all(&target).unwrap();
+        let remover = FakeRemover::default();
+
+        let outcome = clean(&[item(&target, root.path(), 100)], &remover);
+
+        assert!(remover.seen().is_empty());
+        assert!(matches!(
+            outcome.skipped.as_slice(),
+            [Skipped {
+                reason: SkipReason::CleanupUnavailable(_),
+                ..
+            }]
+        ));
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
     fn system_trash_itself_refuses_on_a_scan_only_platform() {
         let CleanupSupport::ScanOnly { reason } = platform::current().cleanup_support() else {
             panic!("this test runs only where cleanup must be unavailable");
@@ -340,7 +374,8 @@ mod tests {
         std::os::unix::fs::symlink(&real, &link).unwrap();
 
         let remover = FakeRemover::default();
-        let outcome = clean(&[item(&link.join("sub"), root.path(), 10)], &remover);
+        let outcome =
+            clean_with_native_trash(&[item(&link.join("sub"), root.path(), 10)], &remover);
 
         assert!(remover.seen().is_empty(), "the remover was handed a link");
         assert_eq!(outcome.skipped.len(), 1);
@@ -372,7 +407,7 @@ mod tests {
         );
         // And a fresh run refuses it outright, since it is now a symlink.
         let remover = FakeRemover::default();
-        let outcome = clean(&[item(&victim, root.path(), 1)], &remover);
+        let outcome = clean_with_native_trash(&[item(&victim, root.path(), 1)], &remover);
         assert!(remover.seen().is_empty());
         assert_eq!(outcome.skipped[0].reason, SkipReason::Refused);
     }
@@ -393,7 +428,7 @@ mod tests {
         let orphan = root.path().join("orphan");
         std::fs::create_dir_all(&orphan).unwrap();
         let remover = FakeRemover::default();
-        let outcome = clean(
+        let outcome = clean_with_native_trash(
             &[CleanupItem {
                 path: orphan,
                 size_bytes: 5,
@@ -417,7 +452,7 @@ mod tests {
             fail: true,
             ..Default::default()
         };
-        let outcome = clean(
+        let outcome = clean_with_native_trash(
             &[item(&a, root.path(), 10), item(&b, root.path(), 20)],
             &remover,
         );
@@ -436,7 +471,7 @@ mod tests {
         let root = tempdir().unwrap();
         let gone = root.path().join("gone");
         let remover = FakeRemover::default();
-        let outcome = clean(&[item(&gone, root.path(), 1)], &remover);
+        let outcome = clean_with_native_trash(&[item(&gone, root.path(), 1)], &remover);
         assert!(remover.seen().is_empty());
         assert_eq!(outcome.skipped.len(), 1);
     }

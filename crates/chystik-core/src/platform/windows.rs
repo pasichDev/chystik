@@ -88,10 +88,8 @@ fn protected_roots() -> Vec<PathBuf> {
 }
 
 fn logical_drives() -> Vec<PathBuf> {
-    use std::os::windows::ffi::OsStringExt;
-    use windows_sys::Win32::Storage::FileSystem::{
-        GetDriveTypeW, GetLogicalDriveStringsW, DRIVE_FIXED, DRIVE_REMOVABLE,
-    };
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use windows_sys::Win32::Storage::FileSystem::{GetDriveTypeW, GetLogicalDriveStringsW};
 
     let mut buffer = vec![0u16; 512];
     // SAFETY: buffer is writable and its size is supplied in UTF-16 code units.
@@ -107,9 +105,15 @@ fn logical_drives() -> Vec<PathBuf> {
             let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
             // SAFETY: wide is NUL-terminated for the duration of the call.
             let kind = unsafe { GetDriveTypeW(wide.as_ptr()) };
-            matches!(kind, DRIVE_FIXED | DRIVE_REMOVABLE).then_some(path)
+            is_user_visible_drive(kind).then_some(path)
         })
         .collect()
+}
+
+fn is_user_visible_drive(kind: u32) -> bool {
+    use windows_sys::Win32::System::WindowsProgramming::{DRIVE_FIXED, DRIVE_REMOVABLE};
+
+    matches!(kind, DRIVE_FIXED | DRIVE_REMOVABLE)
 }
 
 fn storage_stats(path: &Path) -> Option<StorageStats> {
@@ -126,4 +130,17 @@ fn storage_stats(path: &Path) -> Option<StorageStats> {
         total_bytes: total,
         free_bytes: free,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows_sys::Win32::System::WindowsProgramming::{DRIVE_FIXED, DRIVE_REMOVABLE};
+
+    #[test]
+    fn includes_fixed_and_removable_drives_only() {
+        assert!(is_user_visible_drive(DRIVE_FIXED));
+        assert!(is_user_visible_drive(DRIVE_REMOVABLE));
+        assert!(!is_user_visible_drive(4)); // DRIVE_REMOTE
+    }
 }
