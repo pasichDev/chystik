@@ -467,6 +467,7 @@ fn clean_safe_yes_moves_only_eligible_paths_to_native_trash() {
         std::fs::create_dir_all(path).unwrap();
         std::fs::write(path.join("fixture.bin"), "x".repeat(2048)).unwrap();
     }
+    let reported_safe = std::fs::canonicalize(&safe).unwrap();
     #[cfg(unix)]
     let symlink_target = {
         let target = fixture.path().join("outside/.cache/go-build");
@@ -521,7 +522,7 @@ fn clean_safe_yes_moves_only_eligible_paths_to_native_trash() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|path| path == safe.to_string_lossy().as_ref()),
+            .any(|path| path == reported_safe.to_string_lossy().as_ref()),
         "safe fixture was not reported as moved: {document}"
     );
     assert!(

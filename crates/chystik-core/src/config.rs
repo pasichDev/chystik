@@ -213,6 +213,8 @@ fn read_optional_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, Con
 
 /// Normalise the smallest list of absolute never-touch roots with identical
 /// semantics: duplicates and children covered by an earlier parent vanish.
+/// Existing roots are canonicalized so they compare with scanner paths; this
+/// is required on Windows where canonical paths carry the `\\\\?\\` prefix.
 pub fn normalize_exclusions(paths: Vec<PathBuf>) -> Vec<PathBuf> {
     let cwd = std::env::current_dir().ok();
     let mut paths: Vec<PathBuf> = paths
@@ -227,6 +229,9 @@ pub fn normalize_exclusions(paths: Vec<PathBuf>) -> Vec<PathBuf> {
                 path
             }
         })
+        // Keep a missing exclusion intact: the user may configure a directory
+        // before it exists. Once it exists, the next load canonicalizes it.
+        .map(|path| std::fs::canonicalize(&path).unwrap_or(path))
         .collect();
     paths.sort();
     paths.dedup();
@@ -289,5 +294,18 @@ mod tests {
 
         assert_eq!(loaded.exclusions, vec![fixture.path().join("never-touch")]);
         assert!(loaded.acknowledges_current_version());
+    }
+
+    #[test]
+    fn existing_exclusion_uses_the_scanner_canonical_path_but_missing_one_is_retained() {
+        let fixture = tempfile::tempdir().unwrap();
+        let existing = fixture.path().join("never-touch");
+        let missing = fixture.path().join("created-later");
+        std::fs::create_dir_all(&existing).unwrap();
+
+        let normalized = normalize_exclusions(vec![existing.clone(), missing.clone()]);
+
+        assert!(normalized.contains(&std::fs::canonicalize(&existing).unwrap()));
+        assert!(normalized.contains(&missing));
     }
 }
