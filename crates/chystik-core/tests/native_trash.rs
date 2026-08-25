@@ -9,6 +9,20 @@
 mod native_trash {
     use chystik_core::cleaner::{clean, CleanupItem, SystemTrash};
 
+    #[cfg(target_os = "windows")]
+    fn same_windows_path(left: &std::path::Path, right: &std::path::Path) -> bool {
+        fn normalize(path: &std::path::Path) -> String {
+            let rendered = path.to_string_lossy().replace('/', "\\");
+            rendered
+                .strip_prefix(r"\\?\")
+                .unwrap_or(&rendered)
+                .trim_end_matches('\\')
+                .to_ascii_lowercase()
+        }
+
+        normalize(left) == normalize(right)
+    }
+
     #[test]
     #[ignore = "moves a fixture through the host native Trash"]
     fn system_trash_moves_a_fixture_without_direct_deletion() {
@@ -39,11 +53,25 @@ mod native_trash {
 
         #[cfg(target_os = "windows")]
         {
-            let recycle_bin_item = trash::os_limited::list()
-                .expect("enumerate the native Windows Recycle Bin")
-                .into_iter()
-                .find(|item| item.original_path() == target)
-                .expect("the fixture must be recoverable from the Windows Recycle Bin");
+            // IFileOperation can return before the Recycle Bin shell folder
+            // finishes publishing the new item. Wait briefly for that
+            // documented desktop boundary, then prove recovery through the
+            // public Recycle Bin list rather than merely the missing source.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            let recycle_bin_item = loop {
+                if let Some(item) = trash::os_limited::list()
+                    .expect("enumerate the native Windows Recycle Bin")
+                    .into_iter()
+                    .find(|item| same_windows_path(&item.original_path(), &target))
+                {
+                    break item;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "the fixture must be recoverable from the Windows Recycle Bin"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            };
             trash::os_limited::restore_all([recycle_bin_item])
                 .expect("restore the recoverable fixture through the Windows Recycle Bin");
             assert!(
