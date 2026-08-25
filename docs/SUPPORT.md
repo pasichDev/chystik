@@ -23,12 +23,13 @@ each requested item as unavailable and never calls a remover; the GUI disables
 the same action.
 
 Linux and macOS use native recovery mechanisms. Windows uses the Shell file
-operation with its Recycle Bin flag, then native CI verifies that a disposable
-fixture is listed as recoverable in the Recycle Bin. The common guard refuses
-links; the Windows adapter additionally refuses every reparse point (including
-junctions and mount points) during scan, privacy probing, validation and the
-identity re-check. Its identity is the native volume-serial/file-index pair,
-opened without following a reparse point.
+operation with `FOFX_RECYCLEONDELETE`, which fails the operation when a volume
+cannot recycle an item instead of falling back to permanent deletion. Native CI
+then verifies that a disposable fixture is listed as recoverable in the Recycle
+Bin. The common guard refuses links; the Windows adapter additionally refuses
+every reparse point (including junctions and mount points) during scan, privacy
+probing, validation and the identity re-check. Its identity is the native
+volume-serial/file-index pair, opened without following a reparse point.
 
 The resulting Windows support is deliberately still marked Preview: hosted
 GitHub has a Windows Server x64 image and a Windows 11 Arm image, but no

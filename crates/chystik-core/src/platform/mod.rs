@@ -254,6 +254,16 @@ fn app_dir_or_current(base: Option<PathBuf>, suffix: &[&str]) -> PathBuf {
     path
 }
 
+/// Move one path to the Windows Recycle Bin, or fail without deleting it.
+///
+/// This is intentionally separate from the cross-platform `trash` crate:
+/// Windows exposes an explicit `FOFX_RECYCLEONDELETE` flag that guarantees a
+/// delete is recycled rather than being only undoable when possible.
+#[cfg(target_os = "windows")]
+pub(crate) fn recycle_to_windows_bin(path: &Path) -> Result<(), String> {
+    windows::recycle_to_bin(path)
+}
+
 /// Create a directory junction without relying on shell-quoted paths.
 ///
 /// `mklink` is a `cmd.exe` builtin. Passing the command and its path

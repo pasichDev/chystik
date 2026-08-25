@@ -10,6 +10,53 @@ pub(super) static ADAPTER: Windows = Windows;
 
 pub(super) struct Windows;
 
+/// Recycle a fully qualified path with the Windows flag that forbids a
+/// permanent-delete fallback. `FOF_ALLOWUNDO` alone is only best-effort;
+/// `FOFX_RECYCLEONDELETE` is the explicit Windows 8+ contract.
+pub(super) fn recycle_to_bin(path: &Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::RPC_E_CHANGED_MODE;
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_APARTMENTTHREADED,
+    };
+    use windows::Win32::UI::Shell::{
+        FileOperation, IFileOperation, IShellItem, SHCreateItemFromParsingName, FOFX_EARLYFAILURE,
+        FOFX_RECYCLEONDELETE, FOF_NO_UI,
+    };
+
+    let canonical = std::fs::canonicalize(path)
+        .map_err(|error| format!("resolve Windows recycle path {}: {error}", path.display()))?;
+    let wide: Vec<u16> = canonical.as_os_str().encode_wide().chain(Some(0)).collect();
+
+    // COM may already be initialized in a different apartment by the GUI.
+    // That is safe to use; only balance CoUninitialize when this call itself
+    // succeeded (including S_FALSE for an already-compatible apartment).
+    let initialize = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+    let must_uninitialize = initialize.is_ok();
+    if initialize.is_err() && initialize != RPC_E_CHANGED_MODE {
+        return Err(format!("initialize Windows Shell COM: {initialize:?}"));
+    }
+
+    let result = unsafe {
+        (|| -> windows::core::Result<()> {
+            let operation: IFileOperation = CoCreateInstance(&FileOperation, None, CLSCTX_ALL)?;
+            operation.SetOperationFlags(FOF_NO_UI | FOFX_EARLYFAILURE | FOFX_RECYCLEONDELETE)?;
+            let item: IShellItem = SHCreateItemFromParsingName(PCWSTR(wide.as_ptr()), None)?;
+            operation.DeleteItem(&item, None)?;
+            operation.PerformOperations()?;
+            if operation.GetAnyOperationsAborted()?.as_bool() {
+                return Err(windows::core::Error::from_win32());
+            }
+            Ok(())
+        })()
+    };
+    if must_uninitialize {
+        unsafe { CoUninitialize() };
+    }
+    result.map_err(|error| format!("move to Windows Recycle Bin: {error}"))
+}
+
 impl Adapter for Windows {
     fn kind(&self) -> PlatformKind {
         PlatformKind::Windows

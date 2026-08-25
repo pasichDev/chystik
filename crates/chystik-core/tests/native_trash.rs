@@ -1,9 +1,9 @@
 //! Opt-in integration evidence for the real desktop recovery mechanism.
 //!
 //! This is ignored by default because it deliberately moves a fixture into the
-//! host Trash. CI invokes it with an isolated home where the host supports
-//! that; the Windows assertion additionally proves the fixture is visible in
-//! the Recycle Bin rather than merely absent from its source path.
+//! host Trash. CI invokes it against a disposable fixture; the Windows
+//! assertion additionally proves the fixture is visible in the Recycle Bin
+//! rather than merely absent from its source path.
 
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 mod native_trash {
@@ -26,9 +26,20 @@ mod native_trash {
     #[test]
     #[ignore = "moves a fixture through the host native Trash"]
     fn system_trash_moves_a_fixture_without_direct_deletion() {
+        // GitHub's Windows workspace lives on an ephemeral D: volume whose
+        // Recycle Bin is disabled. The user profile stays on the system
+        // volume, which is the supported native Recycle Bin path and is where
+        // Windows users normally keep Chystik's default scan roots.
+        #[cfg(target_os = "windows")]
+        let fixture_parent = std::env::var_os("USERPROFILE")
+            .map(std::path::PathBuf::from)
+            .filter(|path| path.is_absolute())
+            .expect("Windows must provide an absolute USERPROFILE");
+        #[cfg(not(target_os = "windows"))]
+        let fixture_parent = std::env::current_dir().expect("test must have a working directory");
         let root = tempfile::Builder::new()
             .prefix("chystik-native-trash-")
-            .tempdir_in(std::env::current_dir().expect("test must have a working directory"))
+            .tempdir_in(fixture_parent)
             .expect("create a disposable trash fixture root");
         let target = root.path().join("recoverable-fixture.txt");
         std::fs::write(&target, "safe native Trash smoke-test fixture")

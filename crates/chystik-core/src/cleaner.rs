@@ -46,7 +46,7 @@ impl Remover for SystemTrash {
         if let CleanupSupport::ScanOnly { reason } = platform::current().cleanup_support() {
             return Err(ChystikError::Io(std::io::Error::other(reason)));
         }
-        move_to_trash(path).map_err(|e| ChystikError::Io(std::io::Error::other(e.to_string())))
+        move_to_trash(path).map_err(|error| ChystikError::Io(std::io::Error::other(error)))
     }
 
     fn describe(&self) -> &'static str {
@@ -54,7 +54,7 @@ impl Remover for SystemTrash {
     }
 }
 
-fn move_to_trash(path: &Path) -> Result<(), trash::Error> {
+fn move_to_trash(path: &Path) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         // NSFileManager uses the native Trash API without requiring Finder
@@ -64,12 +64,17 @@ fn move_to_trash(path: &Path) -> Result<(), trash::Error> {
 
         let mut context = trash::TrashContext::default();
         context.set_delete_method(DeleteMethod::NsFileManager);
-        context.delete(path)
+        context.delete(path).map_err(|error| error.to_string())
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
     {
-        trash::delete(path)
+        crate::platform::recycle_to_windows_bin(path)
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        trash::delete(path).map_err(|error| error.to_string())
     }
 }
 
