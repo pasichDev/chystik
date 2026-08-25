@@ -35,7 +35,7 @@ jobs:
           install -Dm755 actionlint "$RUNNER_TEMP/bin/actionlint"
 
       - name: Lint GitHub Actions workflows
-        run: "$RUNNER_TEMP/bin/actionlint"
+        run: "${RUNNER_TEMP}/bin/actionlint"
 
       - name: Check changed lines for whitespace errors
         run: |
