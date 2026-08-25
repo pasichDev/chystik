@@ -29,7 +29,7 @@ impl Adapter for Linux {
 
     fn privacy_roots(&self) -> super::PrivacyRoots {
         super::PrivacyRoots {
-            home_dir: super::home_dir_or_current(),
+            home_dir: super::privacy_home_dir_or_current(),
             roaming_dir: None,
             local_dir: None,
         }

@@ -16,7 +16,7 @@ impl Adapter for Windows {
     }
 
     fn app_paths(&self) -> AppPaths {
-        let home_dir = super::home_dir_or_current();
+        let home_dir = super::privacy_home_dir_or_current();
         let roaming = env_absolute("APPDATA").or_else(|| Some(home_dir.join("AppData/Roaming")));
         let local = env_absolute("LOCALAPPDATA").or_else(|| Some(home_dir.join("AppData/Local")));
         AppPaths {

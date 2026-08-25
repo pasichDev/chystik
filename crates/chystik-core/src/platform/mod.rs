@@ -233,6 +233,17 @@ fn home_dir_or_current() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+/// Privacy tests use an isolated home so probing never reads a developer's
+/// real trace files. Keep that override local to the privacy resolver rather
+/// than changing application configuration paths for the whole test process.
+fn privacy_home_dir_or_current() -> PathBuf {
+    #[cfg(test)]
+    if let Some(home) = env_absolute("CHYSTIK_TEST_HOME") {
+        return home;
+    }
+    home_dir_or_current()
+}
+
 fn app_dir_or_current(base: Option<PathBuf>, suffix: &[&str]) -> PathBuf {
     let mut path = base
         .or_else(|| std::env::current_dir().ok())
