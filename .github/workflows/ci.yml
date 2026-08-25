@@ -9,7 +9,43 @@ env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  hygiene:
+    name: workflow lint · diff hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install pinned actionlint
+        run: |
+          set -euo pipefail
+          archive='actionlint_1.7.12_linux_amd64.tar.gz'
+          curl -fsSLO "https://github.com/rhysd/actionlint/releases/download/v1.7.12/$archive"
+          echo '8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  actionlint_1.7.12_linux_amd64.tar.gz' | sha256sum -c -
+          tar -xzf "$archive" actionlint
+          install -Dm755 actionlint "$RUNNER_TEMP/bin/actionlint"
+
+      - name: Lint GitHub Actions workflows
+        run: "$RUNNER_TEMP/bin/actionlint"
+
+      - name: Check changed lines for whitespace errors
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == 'pull_request' ]]; then
+            git diff --check "origin/$GITHUB_BASE_REF...$GITHUB_SHA"
+          else
+            git diff --check "$GITHUB_SHA^..$GITHUB_SHA"
+          fi
+
   check:
     name: fmt · clippy · test
     runs-on: ubuntu-latest
