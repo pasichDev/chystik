@@ -38,26 +38,32 @@ pub(super) fn recycle_to_bin(path: &Path) -> Result<(), String> {
         return Err(format!("initialize Windows Shell COM: {initialize:?}"));
     }
 
-    let result = unsafe {
-        (|| -> windows::core::Result<()> {
-            let operation: IFileOperation = CoCreateInstance(&FileOperation, None, CLSCTX_ALL)?;
-            // Keep the normal Shell undo/recycle mode enabled as the base
-            // contract, then require the stronger Windows 8+ recycle flag.
-            // Some supported Shell hosts reject FOFX_RECYCLEONDELETE without
-            // FOF_ALLOWUNDO with E_INVALIDARG instead of treating it as the
-            // documented recycle operation.
+    let result = (|| -> Result<(), String> {
+        let operation: IFileOperation =
+            unsafe { CoCreateInstance(&FileOperation, None, CLSCTX_ALL) }
+                .map_err(|error| format!("create Windows Shell operation: {error}"))?;
+        // Retain the Shell's normal undo/recycle base mode, then require the
+        // stronger Windows 8+ flag that disallows a permanent-delete fallback.
+        unsafe {
             operation.SetOperationFlags(
                 FOF_NO_UI | FOF_ALLOWUNDO | FOFX_EARLYFAILURE | FOFX_RECYCLEONDELETE,
-            )?;
-            let item: IShellItem = SHCreateItemFromParsingName(PCWSTR(wide.as_ptr()), None)?;
-            operation.DeleteItem(&item, None)?;
-            operation.PerformOperations()?;
-            if operation.GetAnyOperationsAborted()?.as_bool() {
-                return Err(windows::core::Error::from_win32());
-            }
-            Ok(())
-        })()
-    };
+            )
+        }
+        .map_err(|error| format!("configure Windows Recycle Bin operation: {error}"))?;
+        let item: IShellItem = unsafe { SHCreateItemFromParsingName(PCWSTR(wide.as_ptr()), None) }
+            .map_err(|error| format!("open Windows Shell item for Recycle Bin: {error}"))?;
+        unsafe { operation.DeleteItem(&item, None) }
+            .map_err(|error| format!("stage item for Windows Recycle Bin: {error}"))?;
+        unsafe { operation.PerformOperations() }
+            .map_err(|error| format!("perform Windows Recycle Bin operation: {error}"))?;
+        if unsafe { operation.GetAnyOperationsAborted() }
+            .map_err(|error| format!("inspect Windows Recycle Bin operation: {error}"))?
+            .as_bool()
+        {
+            return Err("Windows Shell aborted the Recycle Bin operation".into());
+        }
+        Ok(())
+    })();
     if must_uninitialize {
         unsafe { CoUninitialize() };
     }
