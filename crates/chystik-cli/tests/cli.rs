@@ -15,6 +15,22 @@ fn isolated(command: &mut Command, home: &std::path::Path) {
         .env("CHYSTIK_TEST_HOME", home);
 }
 
+/// Resolve the native configuration location through the CLI itself instead
+/// of copying Linux paths into a test that also runs on macOS and Windows.
+fn isolated_config_path(home: &std::path::Path) -> std::path::PathBuf {
+    let mut command = chystik();
+    command.args(["config", "path"]);
+    isolated(&mut command, home);
+    let output = command.output().unwrap();
+    assert!(
+        output.status.success(),
+        "config path failed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    std::path::PathBuf::from(String::from_utf8(output.stdout).unwrap().trim())
+}
+
 #[test]
 fn scan_json_writes_a_versioned_document_and_no_diagnostics_on_success() {
     let fixture = tempfile::tempdir().unwrap();
@@ -461,10 +477,11 @@ fn clean_safe_yes_moves_only_eligible_paths_to_native_trash() {
         target
     };
 
-    let config_dir = fixture.path().join("config/chystik");
-    std::fs::create_dir_all(&config_dir).unwrap();
+    let config_path = isolated_config_path(fixture.path());
+    let config_dir = config_path.parent().unwrap();
+    std::fs::create_dir_all(config_dir).unwrap();
     std::fs::write(
-        config_dir.join("config.json"),
+        config_path,
         serde_json::json!({
             "schema_version": 1,
             "exclusions": [excluded],
@@ -492,7 +509,9 @@ fn clean_safe_yes_moves_only_eligible_paths_to_native_trash() {
 
     assert!(
         output.status.success(),
-        "stderr: {}",
+        "native cleanup failed with {:?}\nstdout: {}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     let document: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();

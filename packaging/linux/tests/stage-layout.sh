@@ -25,6 +25,7 @@ test -f "$stage_dir/usr/share/icons/hicolor/scalable/apps/chystik.svg"
 test -f "$stage_dir/usr/share/licenses/chystik/LICENSE"
 
 grep -qx 'Exec=chystik-gui' "$stage_dir/usr/share/applications/chystik.desktop"
-grep -q 'cleanup' "$stage_dir/usr/share/man/man1/chystik.1"
+grep -Fq 'chystik\-clean(1)' "$stage_dir/usr/share/man/man1/chystik.1"
+grep -Fq 'native Trash' "$stage_dir/usr/share/man/man1/chystik.1"
 grep -q 'chystik' "$stage_dir/usr/share/bash-completion/completions/chystik"
 echo "Linux package staging layout is valid"
