@@ -5,7 +5,7 @@
 //!   mtime)
 //! - prune well-known non-interesting subtrees early (proc/sys/dev/node_modules
 //!   contents are NOT descended into once matched as findings)
-//! - emit progress through an mpsc channel
+//! - emit progress to either a compatibility mpsc channel or a streaming sink
 //! - support cancellation via AtomicBool
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -46,6 +46,25 @@ pub struct ScanOptions {
     /// These are reported with the command that reclaims them and are never
     /// deletable by Chystik itself.
     pub include_advisories: bool,
+}
+
+/// Terminal counters for a streaming scan. A CLI JSONL consumer can receive
+/// every finding while retaining only these two numbers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScanSummary {
+    pub findings: u64,
+    pub total_bytes: u64,
+}
+
+/// Progress sent by [`scan_many_stream`]. Unlike [`ScanProgress`], its
+/// terminal event never embeds a complete findings vector.
+#[derive(Debug, Clone)]
+pub enum ScanStreamEvent {
+    Started { root: PathBuf },
+    DirectoriesScanned { count: u64 },
+    FindingFound(Finding),
+    Finished(ScanSummary),
+    Cancelled,
 }
 
 impl Default for ScanOptions {
@@ -94,51 +113,112 @@ pub fn scan_many(
     tx: Sender<ScanProgress>,
     cancel: &Arc<AtomicBool>,
 ) -> Result<Vec<Finding>, ChystikError> {
-    let dirs = Arc::new(AtomicU64::new(0));
-    let mut all = Vec::new();
-    for root in roots {
-        match scan_root(root, options, &tx, cancel, &dirs) {
-            Ok(found) => all.extend(found),
-            Err(e) => {
-                if matches!(e, ChystikError::Cancelled) {
-                    let _ = tx.send(ScanProgress::Cancelled);
-                }
-                return Err(e);
+    let all = Arc::new(Mutex::new(Vec::new()));
+    let collected = all.clone();
+    let compatibility_tx = tx.clone();
+    let result = scan_many_stream(roots, options, cancel, move |event| match event {
+        ScanStreamEvent::Started { root } => {
+            let _ = compatibility_tx.send(ScanProgress::Started { root });
+        }
+        ScanStreamEvent::DirectoriesScanned { count } => {
+            let _ = compatibility_tx.send(ScanProgress::DirectoriesScanned { count });
+        }
+        ScanStreamEvent::FindingFound(finding) => {
+            collected.lock().unwrap().push(finding.clone());
+            let _ = compatibility_tx.send(ScanProgress::FindingFound(Box::new(finding)));
+        }
+        ScanStreamEvent::Finished(_) | ScanStreamEvent::Cancelled => {}
+    });
+    match result {
+        Ok(_) => {
+            let findings = all
+                .lock()
+                .map_err(|_| ChystikError::Io(std::io::Error::other("scanner lock poisoned")))?
+                .clone();
+            let _ = tx.send(ScanProgress::Finished {
+                findings: findings.clone(),
+            });
+            Ok(findings)
+        }
+        Err(error) => {
+            if matches!(error, ChystikError::Cancelled) {
+                let _ = tx.send(ScanProgress::Cancelled);
             }
+            Err(error)
+        }
+    }
+}
+
+/// Stream several roots without retaining their findings. The callback may be
+/// called by scanner worker threads, so callers that write to a single stream
+/// must synchronize that writer themselves. Exactly one terminal event is
+/// emitted for the whole run.
+pub fn scan_many_stream<F>(
+    roots: &[PathBuf],
+    options: &ScanOptions,
+    cancel: &Arc<AtomicBool>,
+    on_event: F,
+) -> Result<ScanSummary, ChystikError>
+where
+    F: Fn(ScanStreamEvent) + Send + Sync + 'static,
+{
+    let callback: Arc<dyn Fn(ScanStreamEvent) + Send + Sync> = Arc::new(on_event);
+    let dirs = Arc::new(AtomicU64::new(0));
+    let findings = Arc::new(AtomicU64::new(0));
+    let total_bytes = Arc::new(AtomicU64::new(0));
+    let counted_callback = callback.clone();
+    let counted_findings = findings.clone();
+    let counted_bytes = total_bytes.clone();
+    let emit: Arc<dyn Fn(ScanStreamEvent) + Send + Sync> = Arc::new(move |event| {
+        if let ScanStreamEvent::FindingFound(finding) = &event {
+            counted_findings.fetch_add(1, Ordering::Relaxed);
+            counted_bytes.fetch_add(finding.size_bytes, Ordering::Relaxed);
+        }
+        counted_callback(event);
+    });
+
+    for root in roots {
+        if let Err(error) = scan_root(root, options, cancel, &dirs, &emit) {
+            if matches!(error, ChystikError::Cancelled) {
+                callback(ScanStreamEvent::Cancelled);
+            }
+            return Err(error);
         }
     }
     if options.include_advisories {
         // Appended once for the whole run, not per root: these are absolute
         // system locations, unrelated to what the user chose to scan.
-        all.extend(crate::advisories::probe());
+        for finding in crate::advisories::probe() {
+            emit(ScanStreamEvent::FindingFound(finding));
+        }
     }
-    let _ = tx.send(ScanProgress::Finished {
-        findings: all.clone(),
-    });
-    Ok(all)
+    let summary = ScanSummary {
+        findings: findings.load(Ordering::Relaxed),
+        total_bytes: total_bytes.load(Ordering::Relaxed),
+    };
+    callback(ScanStreamEvent::Finished(summary));
+    Ok(summary)
 }
 
-/// Walk one root. Emits `Started`, `DirectoriesScanned` and `FindingFound`;
-/// terminal events are the caller's job (see [`scan_many`]).
+/// Walk one root. Terminal events are the caller's job (see
+/// [`scan_many_stream`]).
 fn scan_root(
     root: &Path,
     options: &ScanOptions,
-    tx: &Sender<ScanProgress>,
     cancel: &Arc<AtomicBool>,
     dirs: &Arc<AtomicU64>,
-) -> Result<Vec<Finding>, ChystikError> {
+    emit: &Arc<dyn Fn(ScanStreamEvent) + Send + Sync>,
+) -> Result<(), ChystikError> {
     if cancel.load(Ordering::Relaxed) {
         return Err(ChystikError::Cancelled);
     }
-    let _ = tx.send(ScanProgress::Started {
+    emit(ScanStreamEvent::Started {
         root: root.to_path_buf(),
     });
 
     let host = crate::platform::current();
-    let found: Arc<Mutex<Vec<Finding>>> = Arc::new(Mutex::new(Vec::new()));
-    let walker_tx = tx.clone();
+    let walker_emit = emit.clone();
     let walker_dirs = dirs.clone();
-    let walker_found = found.clone();
     let walker_cancel = cancel.clone();
     let mut skip = options.skip_names.clone();
     if options.skip_unscannable_mounts {
@@ -206,7 +286,7 @@ fn scan_root(
                 for (path, _, _) in candidates.into_iter().skip(rule.keep) {
                     let n = walker_dirs.fetch_add(1, Ordering::Relaxed) + 1;
                     if n.is_multiple_of(1000) {
-                        let _ = walker_tx.send(ScanProgress::DirectoriesScanned { count: n });
+                        walker_emit(ScanStreamEvent::DirectoriesScanned { count: n });
                     }
                     let (size_bytes, last_used) = entry_stats(&path, &walker_cancel, host);
                     if size_bytes < min_bytes {
@@ -222,8 +302,7 @@ fn scan_root(
                         note: rule.note.to_owned(),
                         advice: None,
                     };
-                    let _ = walker_tx.send(ScanProgress::FindingFound(Box::new(finding.clone())));
-                    walker_found.lock().unwrap().push(finding);
+                    walker_emit(ScanStreamEvent::FindingFound(finding));
                 }
                 return;
             }
@@ -246,7 +325,7 @@ fn scan_root(
                 }
                 let n = walker_dirs.fetch_add(1, Ordering::Relaxed) + 1;
                 if n.is_multiple_of(1000) {
-                    let _ = walker_tx.send(ScanProgress::DirectoriesScanned { count: n });
+                    walker_emit(ScanStreamEvent::DirectoriesScanned { count: n });
                 }
                 if let Some(m) = rules::classify(&path) {
                     let (size_bytes, last_used) = dir_stats(&path, &walker_cancel, host);
@@ -266,8 +345,7 @@ fn scan_root(
                         note: m.note,
                         advice: None,
                     };
-                    let _ = walker_tx.send(ScanProgress::FindingFound(Box::new(finding.clone())));
-                    walker_found.lock().unwrap().push(finding);
+                    walker_emit(ScanStreamEvent::FindingFound(finding));
                 }
             }
         });
@@ -284,11 +362,7 @@ fn scan_root(
         return Err(ChystikError::Cancelled);
     }
 
-    let findings = found
-        .lock()
-        .map_err(|_| ChystikError::Io(std::io::Error::other("scanner lock poisoned")))?
-        .clone();
-    Ok(findings)
+    Ok(())
 }
 
 /// Size and mtime of one entry, whether it is a file or a whole subtree.
@@ -410,6 +484,31 @@ mod tests {
             .iter()
             .any(|e| matches!(e, ScanProgress::FindingFound(_))));
         assert!(matches!(events.last(), Some(ScanProgress::Finished { .. })));
+    }
+
+    #[test]
+    fn streaming_scan_emits_each_finding_without_returning_a_findings_buffer() {
+        let root = tempfile::tempdir().unwrap();
+        seed_project(root.path());
+        let cancel = Arc::new(AtomicBool::new(false));
+        let emitted = Arc::new(Mutex::new(Vec::new()));
+        let seen = emitted.clone();
+
+        let summary = scan_many_stream(
+            &[root.path().to_path_buf()],
+            &test_options(),
+            &cancel,
+            move |event| {
+                if let ScanStreamEvent::FindingFound(finding) = event {
+                    seen.lock().unwrap().push(finding.path);
+                }
+            },
+        )
+        .expect("stream scan ok");
+
+        let paths = emitted.lock().unwrap();
+        assert_eq!(summary.findings, paths.len() as u64);
+        assert!(paths.iter().any(|path| path.ends_with("node_modules")));
     }
 
     #[test]

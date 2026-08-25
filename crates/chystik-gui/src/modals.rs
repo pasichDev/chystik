@@ -376,7 +376,7 @@ impl ChystikApp {
             .into_iter()
             .map(|(i, f)| {
                 let passed = match self.owning_root(&f.path) {
-                    Some(root) => chystik_core::guard::check(&f.path, root).is_ok(),
+                    Some(root) => chystik_core::guard::check(&f.path, &root).is_ok(),
                     None => false,
                 };
                 (i, f.path.clone(), f.size_bytes, f.severity, passed)

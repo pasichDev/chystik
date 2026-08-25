@@ -34,7 +34,7 @@ printf '%s\n' \
     'Architecture: amd64' \
     'Maintainer: pasichDev <67899666+pasichDev@users.noreply.github.com>' \
     'Depends: libgtk-3-0, libxkbcommon0, libxkbcommon-x11-0, libwayland-client0, libx11-6, libgl1' \
-    'Description: Safety-first developer disk cleanup GUI' \
+    'Description: Safety-first developer disk cleanup GUI and CLI' \
     ' Chystik classifies developer caches and only moves verified cleanup targets to trash.' \
     > "$root/DEBIAN/control"
 

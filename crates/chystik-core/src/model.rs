@@ -20,6 +20,16 @@ pub enum Severity {
 }
 
 impl Severity {
+    /// Stable lowercase identifier used in machine-readable output and CLI
+    /// arguments. Unlike [`Self::label`], this is part of the public contract.
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Severity::Safe => "safe",
+            Severity::Moderate => "moderate",
+            Severity::Risky => "risky",
+        }
+    }
+
     pub fn label(&self) -> &'static str {
         match self {
             Severity::Safe => "Safe",
@@ -85,6 +95,28 @@ pub enum Category {
 }
 
 impl Category {
+    /// Stable lowercase identifier used in machine-readable output and CLI
+    /// arguments. Keep this aligned with the `serde(rename_all)` contract.
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Category::BuildArtifacts => "build_artifacts",
+            Category::PackageCaches => "package_caches",
+            Category::IdeToolchains => "ide_toolchains",
+            Category::AiModels => "ai_models",
+            Category::BrowserSystem => "browser_system",
+            Category::AndroidDev => "android_dev",
+            Category::AiAgents => "ai_agents",
+            Category::Containers => "containers",
+            Category::Installers => "installers",
+            Category::GameLaunchers => "game_launchers",
+            Category::MediaApps => "media_apps",
+            Category::Messengers => "messengers",
+            Category::CloudSync => "cloud_sync",
+            Category::OfficeDocs => "office_docs",
+            Category::SystemJunk => "system_junk",
+        }
+    }
+
     pub fn label(&self) -> &'static str {
         match self {
             Category::BuildArtifacts => "Build artifacts",
@@ -174,6 +206,8 @@ pub enum ScanProgress {
 /// Errors produced by core operations.
 #[derive(Debug, thiserror::Error)]
 pub enum ChystikError {
+    #[error("invalid input: {0}")]
+    InvalidInput(String),
     #[error("path is protected by safety guard: {0}")]
     ProtectedPath(PathBuf),
     #[error("io error: {0}")]

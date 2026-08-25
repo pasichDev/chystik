@@ -2,7 +2,7 @@
 pkgname=chystik
 pkgver=0.1.0
 pkgrel=1
-pkgdesc='Safety-first developer disk cleanup GUI'
+pkgdesc='Safety-first developer disk cleanup GUI and CLI'
 arch=('x86_64')
 url='https://github.com/pasichDev/chystik'
 license=('MIT')
@@ -13,7 +13,7 @@ sha256sums=('SKIP')
 
 build() {
     cd "${srcdir}/${pkgname}-${pkgver}"
-    cargo build --release --locked --package chystik-gui
+    cargo build --release --locked --package chystik-gui --package chystik-cli
 }
 
 package() {
@@ -21,6 +21,9 @@ package() {
     cd "${srcdir}/${pkgname}-${pkgver}"
 
     install -Dm755 target/release/chystik-gui "${pkgdir}/usr/bin/chystik-gui"
+    install -Dm755 target/release/chystik "${pkgdir}/usr/bin/chystik"
+    install -Dm644 "$(find target/release/build -path '*/out/chystik.1' -type f -print -quit)" \
+        "${pkgdir}/usr/share/man/man1/chystik.1"
     install -Dm644 packaging/chystik.desktop "${pkgdir}/usr/share/applications/chystik.desktop"
     install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
     for icon in assets/icons/chystik-*.png; do

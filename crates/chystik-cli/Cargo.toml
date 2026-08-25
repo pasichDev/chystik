@@ -1,0 +1,30 @@
+[package]
+name = "chystik-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Safe, scriptable command-line frontend for Chystik"
+build = "build.rs"
+
+[[bin]]
+name = "chystik"
+path = "src/main.rs"
+
+[dependencies]
+chystik-core = { path = "../chystik-core" }
+chrono = { workspace = true }
+clap = { workspace = true }
+clap_complete = { workspace = true }
+ctrlc = { workspace = true }
+ratatui = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[build-dependencies]
+clap = { workspace = true }
+clap_mangen = "0.2.30"

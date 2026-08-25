@@ -482,6 +482,53 @@ mod tests {
     }
 
     #[test]
+    fn permission_denied_is_a_partial_cleanup_failure_not_a_false_success() {
+        struct PermissionDeniedRemover {
+            calls: std::sync::atomic::AtomicUsize,
+        }
+
+        impl Remover for PermissionDeniedRemover {
+            fn remove(&self, _path: &Path) -> Result<(), ChystikError> {
+                if self
+                    .calls
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                    == 0
+                {
+                    Err(ChystikError::Io(std::io::Error::from(
+                        std::io::ErrorKind::PermissionDenied,
+                    )))
+                } else {
+                    Ok(())
+                }
+            }
+        }
+
+        let root = tempdir().unwrap();
+        let denied = root.path().join("denied");
+        let succeeds = root.path().join("succeeds");
+        std::fs::create_dir_all(&denied).unwrap();
+        std::fs::create_dir_all(&succeeds).unwrap();
+
+        let outcome = clean_with_native_trash(
+            &[
+                item(&denied, root.path(), 10),
+                item(&succeeds, root.path(), 20),
+            ],
+            &PermissionDeniedRemover {
+                calls: std::sync::atomic::AtomicUsize::new(0),
+            },
+        );
+
+        assert_eq!(outcome.removed, vec![succeeds]);
+        assert_eq!(outcome.freed_bytes, 20);
+        assert_eq!(outcome.skipped.len(), 1, "the denied item is reported");
+        assert!(matches!(
+            outcome.skipped[0].reason,
+            SkipReason::RemoverFailed(ref message) if message.contains("permission denied")
+        ));
+    }
+
+    #[test]
     fn a_missing_path_is_skipped_rather_than_removed() {
         let root = tempdir().unwrap();
         let gone = root.path().join("gone");

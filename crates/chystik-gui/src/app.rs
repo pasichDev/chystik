@@ -387,7 +387,7 @@ impl ChystikApp {
             .filter(|t| t.enabled)
             .map(|t| t.root.clone())
             .collect();
-        dedup_nested_roots(&mut roots);
+        chystik_core::app::dedup_nested_roots(&mut roots);
         roots
     }
 
@@ -425,9 +425,9 @@ impl ChystikApp {
 
     /// Longest configured target containing `path`; anchors guard checks
     /// when several targets overlap.
-    pub(crate) fn owning_root(&self, path: &Path) -> Option<&Path> {
-        let refs: Vec<&Path> = self.targets.iter().map(|t| t.root.as_path()).collect();
-        longest_containing(&refs, path)
+    pub(crate) fn owning_root(&self, path: &Path) -> Option<PathBuf> {
+        let roots = self.effective_roots();
+        chystik_core::app::owning_root(&roots, path).map(Path::to_path_buf)
     }
 }
 
@@ -637,16 +637,42 @@ impl ChystikApp {
         let spawned = std::thread::Builder::new()
             .name("chystik-scanner".to_string())
             .spawn(move || {
-                let options = chystik_core::scanner::ScanOptions {
+                let request = chystik_core::app::ScanRequest {
+                    roots,
                     exclude: exclusions,
-                    ..chystik_core::scanner::ScanOptions::default()
+                    // The desktop UI has always shown advisory rows with a
+                    // recovery command; retain that contract through the
+                    // shared application service used by the CLI.
+                    include_advisories: true,
+                    ..chystik_core::app::ScanRequest::default()
                 };
-                let result = chystik_core::scanner::scan_many(
-                    &roots,
-                    &options,
-                    tx.clone(),
-                    &cancel_for_thread,
-                );
+                let collected = Arc::new(std::sync::Mutex::new(Vec::new()));
+                let callback_tx = tx.clone();
+                let callback_findings = collected.clone();
+                let result =
+                    chystik_core::app::scan_stream(&request, &cancel_for_thread, move |event| {
+                        match event {
+                            chystik_core::app::AppScanEvent::Started { root } => {
+                                let _ = callback_tx.send(ScanProgress::Started { root });
+                            }
+                            chystik_core::app::AppScanEvent::DirectoriesScanned { count } => {
+                                let _ =
+                                    callback_tx.send(ScanProgress::DirectoriesScanned { count });
+                            }
+                            chystik_core::app::AppScanEvent::Finding(finding) => {
+                                callback_findings.lock().unwrap().push(finding.clone());
+                                let _ =
+                                    callback_tx.send(ScanProgress::FindingFound(Box::new(finding)));
+                            }
+                            chystik_core::app::AppScanEvent::Finished(_) => {
+                                let findings = callback_findings.lock().unwrap().clone();
+                                let _ = callback_tx.send(ScanProgress::Finished { findings });
+                            }
+                            chystik_core::app::AppScanEvent::Cancelled => {
+                                let _ = callback_tx.send(ScanProgress::Cancelled);
+                            }
+                        }
+                    });
                 if let Err(e) = result {
                     if !matches!(e, chystik_core::ChystikError::Cancelled) {
                         eprintln!("[chystik] scan error: {e}");
@@ -830,7 +856,7 @@ impl ChystikApp {
                 CleanupItem {
                     path: finding.path.clone(),
                     size_bytes: finding.size_bytes,
-                    scan_root: self.owning_root(&finding.path).map(Path::to_path_buf),
+                    scan_root: self.owning_root(&finding.path),
                 },
             ));
         }

@@ -1,7 +1,7 @@
 Name:           chystik
 Version:        @VERSION@
 Release:        1%{?dist}
-Summary:        Safety-first developer disk cleanup GUI
+Summary:        Safety-first developer disk cleanup GUI and CLI
 License:        MIT
 URL:            https://github.com/pasichDev/chystik
 Source0:        chystik-@VERSION@.tar.gz
@@ -32,6 +32,12 @@ cp -a . %{buildroot}/
 %files
 %license /usr/share/licenses/chystik/LICENSE
 /usr/bin/chystik-gui
+/usr/bin/chystik
+/usr/share/man/man1/chystik.1*
+/usr/share/bash-completion/completions/chystik
+/usr/share/zsh/site-functions/_chystik
+/usr/share/fish/vendor_completions.d/chystik.fish
+/usr/share/powershell/Modules/Chystik/chystik.ps1
 /usr/share/applications/chystik.desktop
 /usr/share/icons/hicolor/*/apps/chystik.png
 /usr/share/icons/hicolor/scalable/apps/chystik.svg
