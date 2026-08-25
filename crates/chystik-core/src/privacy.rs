@@ -18,6 +18,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::model::Severity;
+use crate::platform::PlatformKind;
 use crate::rules::home_root;
 
 /// What kind of trace this is. Groups the list into something readable.
@@ -190,6 +191,9 @@ const TRACES: &[Trace] = &[
 /// Absent paths are simply not reported: a machine with no Chrome never
 /// sees a Chrome row.
 pub fn probe() -> Vec<PrivacyItem> {
+    if crate::platform::current().kind() != PlatformKind::Linux {
+        return Vec::new();
+    }
     let Some(home) = home_root() else {
         return Vec::new();
     };
@@ -208,12 +212,12 @@ fn probe_one(home: &Path, trace: &Trace) -> Option<PrivacyItem> {
     if meta.file_type().is_symlink() {
         return None;
     }
+    let host = crate::platform::current();
     let (size_bytes, last_used) = if meta.is_dir() {
         tree_size(&path)
     } else {
-        use std::os::unix::fs::MetadataExt;
         (
-            meta.blocks() * 512,
+            host.allocated_bytes(&meta),
             meta.modified().ok().map(DateTime::<Utc>::from),
         )
     };
@@ -229,8 +233,7 @@ fn probe_one(home: &Path, trace: &Trace) -> Option<PrivacyItem> {
 }
 
 fn tree_size(dir: &Path) -> (u64, Option<DateTime<Utc>>) {
-    use std::os::unix::fs::MetadataExt;
-
+    let host = crate::platform::current();
     let mut stack = vec![dir.to_path_buf()];
     let (mut bytes, mut newest) = (0u64, None::<DateTime<Utc>>);
     while let Some(path) = stack.pop() {
@@ -244,7 +247,7 @@ fn tree_size(dir: &Path) -> (u64, Option<DateTime<Utc>>) {
             if meta.file_type().is_dir() {
                 stack.push(entry.path());
             } else if meta.file_type().is_file() {
-                bytes += meta.blocks() * 512;
+                bytes += host.allocated_bytes(&meta);
                 if let Ok(modified) = meta.modified() {
                     let stamp: DateTime<Utc> = modified.into();
                     if newest.is_none_or(|current| stamp > current) {
@@ -261,6 +264,7 @@ fn tree_size(dir: &Path) -> (u64, Option<DateTime<Utc>>) {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     #[test]
     fn every_trace_explains_itself() {
         for trace in TRACES {
@@ -312,6 +316,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_symlinked_trace_is_not_reported() {
         let home = tempfile::tempdir().unwrap();

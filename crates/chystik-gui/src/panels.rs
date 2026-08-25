@@ -828,7 +828,8 @@ impl ChystikApp {
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let can_delete = sel_count > 0 && !busy;
+                let cleanup_available = self.cleanup_available();
+                let can_delete = sel_count > 0 && !busy && cleanup_available;
                 // Destructive action: filled, red, and to the right of the
                 // escape hatch. It used to look identical to Cancel.
                 // Without the branch the idle button reads "Move 0 B to Trash".
@@ -846,7 +847,11 @@ impl ChystikApp {
                     severity_color(Severity::Risky),
                     can_delete,
                 )
-                .on_hover_text(s.move_to_trash_hint.as_str())
+                .on_hover_text(if cleanup_available {
+                    s.move_to_trash_hint.as_str()
+                } else {
+                    s.cleanup_unavailable.as_str()
+                })
                 .clicked()
                 {
                     self.confirm_delete_open = true;
@@ -1195,9 +1200,13 @@ impl ChystikApp {
                     ui,
                     &label,
                     severity_color(Severity::Risky),
-                    count > 0 && !self.scanning(),
+                    count > 0 && !self.scanning() && self.cleanup_available(),
                 )
-                .on_hover_text(s.move_to_trash_hint.as_str())
+                .on_hover_text(if self.cleanup_available() {
+                    s.move_to_trash_hint.as_str()
+                } else {
+                    s.cleanup_unavailable.as_str()
+                })
                 .clicked()
                 {
                     // Always confirmed, never acted on directly: this
@@ -1224,13 +1233,11 @@ fn usage_bar(ui: &mut egui::Ui, fraction: f32, width: f32, color: egui::Color32)
     );
 }
 
-/// `$HOME` collapsed to `~`, which is how these paths are recognised.
+/// The platform home directory collapsed to `~`, which is how paths are recognised.
 fn short_home_path(path: &std::path::Path) -> String {
     let full = path.display().to_string();
-    match std::env::var("HOME") {
-        Ok(home) if !home.is_empty() && full.starts_with(&home) => {
-            format!("~{}", &full[home.len()..])
-        }
-        _ => full,
-    }
+    let home = chystik_core::platform::current().app_paths().home_dir;
+    full.strip_prefix(&home.to_string_lossy().into_owned())
+        .map(|tail| format!("~{tail}"))
+        .unwrap_or(full)
 }

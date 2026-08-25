@@ -6,8 +6,8 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
-use chystik_core::disks::DiskInfo;
 use chystik_core::model::{Category, Finding, Severity};
+use chystik_core::platform::StorageVolume;
 
 // ---------------------------------------------------------------------------
 
@@ -144,12 +144,12 @@ impl CatStat {
 /// volumes, skipping mounts nested inside another non-root volume (e.g. a
 /// bind mount living inside a data disk). `/` itself never absorbs the
 /// others here — overlapping choices are collapsed later, at scan time.
-pub(crate) fn default_roots(disks: &[DiskInfo]) -> Vec<PathBuf> {
+pub(crate) fn default_roots(disks: &[StorageVolume]) -> Vec<PathBuf> {
     let mut chosen: Vec<PathBuf> = Vec::new();
     if disks.iter().any(|d| d.mount_point == Path::new("/")) {
         chosen.push(PathBuf::from("/"));
     }
-    let mut others: Vec<&DiskInfo> = disks
+    let mut others: Vec<&StorageVolume> = disks
         .iter()
         .filter(|d| d.mount_point != Path::new("/"))
         .collect();
@@ -243,8 +243,8 @@ impl CleanBuckets {
 mod tests {
     use super::*;
 
-    fn disk(mount: &str, total: u64, free: u64) -> DiskInfo {
-        DiskInfo {
+    fn disk(mount: &str, total: u64, free: u64) -> StorageVolume {
+        StorageVolume {
             source: format!("/dev/{}", mount.trim_matches('/')),
             mount_point: PathBuf::from(mount),
             fs_type: "ext4".into(),

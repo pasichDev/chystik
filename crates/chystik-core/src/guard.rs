@@ -6,11 +6,6 @@
 use crate::model::ChystikError;
 use std::path::Path;
 
-/// Refuse these absolute paths outright.
-pub const PROTECTED_PREFIXES: &[&str] = &[
-    "/", "/boot", "/etc", "/usr", "/var", "/opt", "/proc", "/sys", "/dev",
-];
-
 /// Refuse these directory names anywhere in the tree.
 pub const PROTECTED_NAMES: &[&str] = &[".git", ".ssh", ".gnupg", ".config"];
 
@@ -141,16 +136,8 @@ fn has_symlinked_ancestor(candidate: &Path, scan_root: &Path) -> bool {
 /// `original` is only used to resolve the `.config` allowlist, which is
 /// expressed relative to `$HOME`.
 fn is_protected_location(path: &Path, original: &Path) -> bool {
-    // System locations: equal to a protected prefix or directly under one.
-    let text = path.to_string_lossy();
-    for protected in PROTECTED_PREFIXES {
-        if *protected == "/" {
-            if text == "/" {
-                return true;
-            }
-        } else if text.as_ref() == *protected || text.starts_with(&format!("{protected}/")) {
-            return true;
-        }
+    if crate::platform::current().is_protected_system_path(path) {
+        return true;
     }
     // Protected dot-dirs anywhere along the path. `.config` alone has
     // audited cache exceptions; `.git`/`.ssh`/`.gnupg` never do.
@@ -220,6 +207,7 @@ mod tests {
     /// `symlink_metadata(candidate)` describes only the last component, so
     /// `<root>/cache-link/sub` lstatted a real directory and passed every
     /// lexical test while physically pointing at `important-data/sub`.
+    #[cfg(unix)]
     #[test]
     fn rejects_a_symlinked_parent_inside_the_scan_root() {
         let root = tempdir().unwrap();
@@ -243,6 +231,7 @@ mod tests {
     }
 
     /// Deeper nesting, and a link that leaves the scan root entirely.
+    #[cfg(unix)]
     #[test]
     fn rejects_a_link_that_escapes_the_scan_root() {
         let outside = tempdir().unwrap();
@@ -259,6 +248,7 @@ mod tests {
 
     /// A protected name reached THROUGH a link must still be refused: the
     /// lexical path says nothing about where it lands.
+    #[cfg(unix)]
     #[test]
     fn protected_names_are_checked_on_the_resolved_path_too() {
         let root = tempdir().unwrap();
@@ -269,6 +259,7 @@ mod tests {
         assert!(check(&link.join(".git"), root.path()).is_err());
     }
 
+    #[cfg(unix)]
     #[test]
     fn rejects_symlink_without_following() {
         let root = tempdir().unwrap();

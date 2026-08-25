@@ -104,13 +104,13 @@ pub(crate) fn classify_group(dir: &Path) -> Option<&'static GroupRule> {
     GROUP_RULES.iter().find(|r| r.rel == rel)
 }
 
-/// `$HOME` for production matching; `CHYSTIK_TEST_HOME` overrides it in
-/// tests so fixtures never touch real user data.
+/// The platform home for production matching; `CHYSTIK_TEST_HOME` overrides
+/// it in tests so fixtures never touch real user data.
 pub(crate) fn home_root() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("CHYSTIK_TEST_HOME") {
         return Some(PathBuf::from(p));
     }
-    std::env::var_os("HOME").map(PathBuf::from)
+    Some(crate::platform::current().app_paths().home_dir)
 }
 
 /// True if `parent` contains any of `markers` (file OR directory).

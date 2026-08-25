@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 
 use crate::model::{Category, Finding, Severity};
+use crate::platform::PlatformKind;
 
 /// One advisable location. `probe` skips any that is absent or empty, so a
 /// machine without snap or apt simply never sees those rows.
@@ -106,6 +107,9 @@ const ADVISORIES: &[Advisory] = &[
 /// subdirectories are skipped silently: this runs unprivileged and most of
 /// `/var` is root-owned, so a partial total is expected and still useful.
 pub fn probe() -> Vec<Finding> {
+    if crate::platform::current().kind() != PlatformKind::Linux {
+        return Vec::new();
+    }
     ADVISORIES.iter().filter_map(probe_one).collect()
 }
 
@@ -132,8 +136,7 @@ fn probe_one(advisory: &Advisory) -> Option<Finding> {
 
 /// Allocated bytes and newest mtime under `dir`, ignoring what we cannot read.
 fn tree_size(dir: &Path) -> (u64, Option<DateTime<Utc>>) {
-    use std::os::unix::fs::MetadataExt;
-
+    let host = crate::platform::current();
     let mut stack = vec![dir.to_path_buf()];
     let (mut bytes, mut newest) = (0u64, None::<DateTime<Utc>>);
     while let Some(path) = stack.pop() {
@@ -148,7 +151,7 @@ fn tree_size(dir: &Path) -> (u64, Option<DateTime<Utc>>) {
             if file_type.is_dir() {
                 stack.push(entry.path());
             } else if file_type.is_file() {
-                bytes += metadata.blocks() * 512;
+                bytes += host.allocated_bytes(&metadata);
                 if let Ok(modified) = metadata.modified() {
                     let timestamp: DateTime<Utc> = modified.into();
                     if newest.is_none_or(|current| timestamp > current) {
@@ -166,6 +169,7 @@ mod tests {
     use super::*;
 
     /// The whole point of an advisory: it must never look deletable.
+    #[cfg(target_os = "linux")]
     #[test]
     fn every_advisory_carries_a_command_and_is_not_actionable() {
         for finding in probe() {

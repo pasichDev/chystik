@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 
 use crate::guard;
 use crate::model::ChystikError;
+use crate::platform::{self, CleanupSupport};
 
 /// Somewhere a file can be sent. The only production implementation is
 /// [`SystemTrash`]; tests use a fake.
@@ -36,12 +37,15 @@ pub trait Remover: Send + Sync {
     }
 }
 
-/// The desktop trash, via the XDG trash specification.
+/// The verified Linux desktop trash implementation.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SystemTrash;
 
 impl Remover for SystemTrash {
     fn remove(&self, path: &Path) -> Result<(), ChystikError> {
+        if let CleanupSupport::ScanOnly { reason } = platform::current().cleanup_support() {
+            return Err(ChystikError::Io(std::io::Error::other(reason)));
+        }
         trash::delete(path).map_err(|e| ChystikError::Io(std::io::Error::other(e.to_string())))
     }
 
@@ -55,6 +59,7 @@ impl Remover for SystemTrash {
 /// Device and inode together identify a filesystem object. A symlink put in
 /// place of a validated directory has a different inode, so comparing this
 /// immediately before removal catches the substitution.
+#[cfg(unix)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileIdentity {
     device: u64,
@@ -62,6 +67,18 @@ pub struct FileIdentity {
     is_symlink: bool,
 }
 
+/// Non-Unix fallback identity. It is never used to enable cleanup: platforms
+/// without a verified native-trash adapter are stopped before this point.
+#[cfg(not(unix))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileIdentity {
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+    is_dir: bool,
+    is_symlink: bool,
+}
+
+#[cfg(unix)]
 impl FileIdentity {
     /// Read without following symlinks. `None` when the path is gone.
     pub fn of(path: &Path) -> Option<Self> {
@@ -75,6 +92,25 @@ impl FileIdentity {
     }
 
     /// True when `path` is still the very same object, and still not a link.
+    pub fn still_matches(&self, path: &Path) -> bool {
+        !self.is_symlink && Self::of(path).is_some_and(|now| now == *self)
+    }
+}
+
+#[cfg(not(unix))]
+impl FileIdentity {
+    /// Read without following symlinks. `None` when the path is gone.
+    pub fn of(path: &Path) -> Option<Self> {
+        let meta = std::fs::symlink_metadata(path).ok()?;
+        Some(Self {
+            len: meta.len(),
+            modified: meta.modified().ok(),
+            is_dir: meta.is_dir(),
+            is_symlink: meta.file_type().is_symlink(),
+        })
+    }
+
+    /// This fallback is defense in depth only; cleanup is scan-only here.
     pub fn still_matches(&self, path: &Path) -> bool {
         !self.is_symlink && Self::of(path).is_some_and(|now| now == *self)
     }
@@ -99,6 +135,8 @@ pub enum SkipReason {
     Refused,
     /// Chystik does not own this space; it carries a command instead.
     Advisory,
+    /// The host has no tested native trash + link-safety implementation.
+    CleanupUnavailable(&'static str),
     /// It changed between validation and removal.
     ChangedUnderUs,
     /// The remover itself failed.
@@ -132,7 +170,22 @@ impl CleanupOutcome {
 /// Run the flow over `items`. Never panics and never stops early: one bad
 /// item must not prevent the rest from being cleaned.
 pub fn clean(items: &[CleanupItem], remover: &dyn Remover) -> CleanupOutcome {
+    clean_with_support(items, remover, platform::current().cleanup_support())
+}
+
+fn clean_with_support(
+    items: &[CleanupItem],
+    remover: &dyn Remover,
+    support: CleanupSupport,
+) -> CleanupOutcome {
     let mut outcome = CleanupOutcome::default();
+    if let CleanupSupport::ScanOnly { reason } = support {
+        outcome.skipped.extend(items.iter().map(|item| Skipped {
+            path: item.path.clone(),
+            reason: SkipReason::CleanupUnavailable(reason),
+        }));
+        return outcome;
+    }
     for item in items {
         let path = item.path.clone();
 
@@ -238,8 +291,46 @@ mod tests {
         assert_eq!(remover.seen().len(), 2);
     }
 
+    #[test]
+    fn scan_only_platform_never_hands_a_path_to_the_remover() {
+        let root = tempdir().unwrap();
+        let target = root.path().join("cache");
+        std::fs::create_dir_all(&target).unwrap();
+        let remover = FakeRemover::default();
+
+        let outcome = clean_with_support(
+            &[item(&target, root.path(), 100)],
+            &remover,
+            CleanupSupport::ScanOnly {
+                reason: "native trash has not been verified",
+            },
+        );
+
+        assert!(remover.seen().is_empty());
+        assert!(matches!(
+            outcome.skipped.as_slice(),
+            [Skipped {
+                reason: SkipReason::CleanupUnavailable(_),
+                ..
+            }]
+        ));
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn system_trash_itself_refuses_on_a_scan_only_platform() {
+        let CleanupSupport::ScanOnly { reason } = platform::current().cleanup_support() else {
+            panic!("this test runs only where cleanup must be unavailable");
+        };
+        let error = SystemTrash
+            .remove(Path::new("this path never needs to exist"))
+            .expect_err("scan-only platforms must refuse before calling the trash backend");
+        assert_eq!(error.to_string(), format!("io error: {reason}"));
+    }
+
     /// The whole point of the abstraction: a refused path must never reach
     /// the remover at all.
+    #[cfg(unix)]
     #[test]
     fn a_symlinked_parent_never_reaches_the_remover() {
         let root = tempdir().unwrap();
@@ -261,6 +352,7 @@ mod tests {
     ///
     /// The identity captured after `guard::check` no longer matches, which
     /// is what narrows the window between validating and removing.
+    #[cfg(unix)]
     #[test]
     fn a_path_swapped_after_validation_is_skipped() {
         let root = tempdir().unwrap();

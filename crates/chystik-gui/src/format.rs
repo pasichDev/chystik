@@ -2,7 +2,7 @@
 
 use chrono::{DateTime, Utc};
 
-use chystik_core::disks::DiskInfo;
+use chystik_core::platform::StorageVolume;
 
 use crate::i18n::{self, Strings};
 
@@ -56,7 +56,7 @@ pub(crate) fn age_label(
 ///
 /// Colour is never the only cue: see `severity_glyph` (shape) and
 /// `severity_pill` (fill weight).
-pub(crate) fn capacity_summary(disks: &[DiskInfo]) -> String {
+pub(crate) fn capacity_summary(disks: &[StorageVolume]) -> String {
     let total: u64 = disks.iter().map(|d| d.total_bytes).sum();
     let free: u64 = disks.iter().map(|d| d.free_bytes).sum();
     format!(
@@ -67,7 +67,7 @@ pub(crate) fn capacity_summary(disks: &[DiskInfo]) -> String {
 }
 
 /// `used / total` usage pair for one volume chip.
-pub(crate) fn disk_usage_label(d: &DiskInfo) -> String {
+pub(crate) fn disk_usage_label(d: &StorageVolume) -> String {
     format!(
         "{} / {}",
         format_size(d.total_bytes.saturating_sub(d.free_bytes)),
@@ -95,12 +95,11 @@ pub(crate) fn truncate_middle(s: &str, max_chars: usize) -> String {
 /// `$HOME` collapses to `~` first: on a real machine most paths share it,
 /// and spelling it out on every row is noise.
 pub(crate) fn split_path_tail(full: &str) -> (String, String) {
-    let shortened = match std::env::var("HOME") {
-        Ok(home) if !home.is_empty() && full.starts_with(&home) => {
-            format!("~{}", &full[home.len()..])
-        }
-        _ => full.to_string(),
-    };
+    let home = chystik_core::platform::current().app_paths().home_dir;
+    let shortened = full
+        .strip_prefix(&home.to_string_lossy().into_owned())
+        .map(|tail| format!("~{tail}"))
+        .unwrap_or_else(|| full.to_string());
     match shortened.rfind('/') {
         Some(i) => (shortened[..=i].to_string(), shortened[i + 1..].to_string()),
         None => (String::new(), shortened),
@@ -127,9 +126,9 @@ mod tests {
 
     const GB: u64 = 1024 * 1024 * 1024;
 
-    /// Minimal `DiskInfo` for the capacity helpers.
-    fn disk(mount: &str, total: u64, free: u64) -> DiskInfo {
-        DiskInfo {
+    /// Minimal volume for the capacity helpers.
+    fn disk(mount: &str, total: u64, free: u64) -> StorageVolume {
+        StorageVolume {
             source: String::new(),
             mount_point: PathBuf::from(mount),
             fs_type: "ext4".to_string(),

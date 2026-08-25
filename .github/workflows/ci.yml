@@ -45,6 +45,33 @@ jobs:
       - name: Release build
         run: cargo build --workspace --release
 
+  platform-compile:
+    name: native compile · ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Compile target-selected adapters and every test/example source on
+      # their native host. We deliberately do not run cleanup tests here:
+      # these targets are scan-only until native trash/reparse safety has
+      # hardware integration evidence.
+      - name: Compile all targets
+        run: cargo check --workspace --all-targets
+
+      - name: Core safety tests
+        run: cargo test -p chystik-core --lib
+
   icon:
     name: icon assets are in sync
     runs-on: ubuntu-latest

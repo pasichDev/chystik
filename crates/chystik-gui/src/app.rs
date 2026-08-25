@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 
 use eframe::egui;
 
-use chystik_core::disks::DiskInfo;
 use chystik_core::model::{Category, Finding, ScanProgress};
+use chystik_core::platform::{self, StorageVolume};
 
 use crate::format::*;
 use crate::i18n::{self, Lang, Strings};
@@ -24,8 +24,8 @@ use crate::widgets::*;
 pub(crate) struct ChystikApp {
     /// Interface language; detected from the locale, switchable at runtime.
     pub(crate) lang: Lang,
-    /// Real volumes from `chystik_core::disks::mount_table()`.
-    pub(crate) disks: Vec<DiskInfo>,
+    /// Real volumes from the target-selected core platform adapter.
+    pub(crate) disks: Vec<StorageVolume>,
     /// Scan targets offered in the Targets popover.
     pub(crate) targets: Vec<ScanTarget>,
 
@@ -149,6 +149,10 @@ impl ChystikApp {
         matches!(self.state, ScanState::Scanning { .. })
     }
 
+    pub(crate) fn cleanup_available(&self) -> bool {
+        platform::current().cleanup_support().is_available()
+    }
+
     /// Move to another view, loading whatever data it needs.
     ///
     /// Both new views read the machine directly rather than the scan, so
@@ -181,7 +185,7 @@ impl ChystikApp {
     pub(crate) fn clear_selected_traces(&mut self) {
         use chystik_core::cleaner::{self, CleanupItem};
 
-        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let home = Some(platform::current().app_paths().home_dir);
         let items: Vec<CleanupItem> = self
             .traces_selected
             .iter()
@@ -355,7 +359,7 @@ impl ChystikApp {
     /// Re-read the mount table (startup + Refresh) and rebuild detected
     /// targets, preserving enable/disable state and user-added folders.
     pub(crate) fn refresh_disks(&mut self) {
-        self.disks = chystik_core::disks::mount_table();
+        self.disks = platform::current().storage_volumes();
         let defaults = default_roots(&self.disks);
         let mut next: Vec<ScanTarget> = Vec::new();
         for root in defaults {
@@ -850,6 +854,7 @@ impl ChystikApp {
                 SkipReason::OutsideEveryTarget => "outside every scan target".to_owned(),
                 SkipReason::Refused => "refused by the safety guard".to_owned(),
                 SkipReason::Advisory => "not Chystik's to delete".to_owned(),
+                SkipReason::CleanupUnavailable(reason) => (*reason).to_owned(),
                 SkipReason::ChangedUnderUs => "changed on disk during the operation".to_owned(),
                 SkipReason::RemoverFailed(e) => e.clone(),
             };
