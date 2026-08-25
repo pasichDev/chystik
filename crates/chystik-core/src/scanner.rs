@@ -187,7 +187,7 @@ fn scan_root(
                 let mut candidates: Vec<(PathBuf, std::time::SystemTime, u64)> = children
                     .iter()
                     .flatten()
-                    .filter(|e| !e.file_type().is_symlink())
+                    .filter(|e| !host.is_link_or_reparse_point(&e.path()))
                     .filter_map(|e| {
                         let path = e.path();
                         let meta = std::fs::symlink_metadata(&path).ok()?;
@@ -229,7 +229,10 @@ fn scan_root(
             }
 
             for entry in children.iter_mut().flatten() {
-                if entry.depth == 0 || entry.file_type().is_symlink() || !entry.file_type().is_dir()
+                if entry.depth == 0
+                    || entry.file_type().is_symlink()
+                    || host.is_link_or_reparse_point(&entry.path())
+                    || !entry.file_type().is_dir()
                 {
                     continue;
                 }
@@ -325,7 +328,7 @@ fn dir_stats(
                 continue;
             };
             let file_type = metadata.file_type();
-            if file_type.is_dir() {
+            if file_type.is_dir() && !host.is_link_or_reparse_point(&entry.path()) {
                 stack.push(entry.path());
             } else if file_type.is_file() {
                 bytes += host.allocated_bytes(&metadata);

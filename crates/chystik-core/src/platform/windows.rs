@@ -26,6 +26,16 @@ impl Adapter for Windows {
         }
     }
 
+    fn privacy_roots(&self) -> super::PrivacyRoots {
+        let home_dir = super::home_dir_or_current();
+        super::PrivacyRoots {
+            home_dir: home_dir.clone(),
+            roaming_dir: env_absolute("APPDATA").or_else(|| Some(home_dir.join("AppData/Roaming"))),
+            local_dir: env_absolute("LOCALAPPDATA")
+                .or_else(|| Some(home_dir.join("AppData/Local"))),
+        }
+    }
+
     fn storage_volumes(&self) -> Vec<StorageVolume> {
         logical_drives()
             .into_iter()
@@ -46,7 +56,12 @@ impl Adapter for Windows {
     }
 
     fn default_skip_roots(&self) -> Vec<PathBuf> {
-        protected_roots()
+        let mut roots = system_roots().to_vec();
+        for drive in logical_drives() {
+            roots.push(drive.join("$Recycle.Bin"));
+            roots.push(drive.join("System Volume Information"));
+        }
+        roots
     }
 
     fn storage_stats(&self, path: &Path) -> Option<StorageStats> {
@@ -59,20 +74,30 @@ impl Adapter for Windows {
         metadata.len()
     }
 
+    fn path_identity(&self, path: &Path) -> Option<super::PathIdentity> {
+        file_identity(path)
+    }
+
     fn is_protected_system_path(&self, path: &Path) -> bool {
-        protected_roots()
-            .iter()
-            .any(|root| is_under(path, root, true))
+        system_roots().iter().any(|root| is_under(path, root, true))
+            || has_protected_volume_component(path)
+    }
+
+    fn is_link_or_reparse_point(&self, path: &Path) -> bool {
+        is_reparse_point(path)
     }
 
     fn cleanup_support(&self) -> CleanupSupport {
-        CleanupSupport::ScanOnly {
-            reason: "Windows cleanup is disabled until Recycle Bin and reparse-point integration tests run on Windows",
-        }
+        CleanupSupport::NativeTrash
     }
 }
 
-fn protected_roots() -> Vec<PathBuf> {
+fn system_roots() -> &'static [PathBuf] {
+    static ROOTS: std::sync::OnceLock<Vec<PathBuf>> = std::sync::OnceLock::new();
+    ROOTS.get_or_init(|| system_roots_uncached())
+}
+
+fn system_roots_uncached() -> Vec<PathBuf> {
     let system_drive = std::env::var_os("SystemDrive")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("C:"));
@@ -85,6 +110,78 @@ fn protected_roots() -> Vec<PathBuf> {
         roots.push(program_files_x86);
     }
     roots
+}
+
+/// These are per-volume system directories on every Windows drive. Checking
+/// the component instead of re-enumerating drives keeps the deletion guard's
+/// hot path constant-time even during a million-entry scan.
+fn has_protected_volume_component(path: &Path) -> bool {
+    path.components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .any(|component| {
+            component.eq_ignore_ascii_case("$Recycle.Bin")
+                || component.eq_ignore_ascii_case("System Volume Information")
+        })
+}
+
+/// Win32 marks symlinks, junctions, mount points and cloud placeholders as
+/// reparse points. We refuse every such indirection rather than trying to
+/// classify tags that can redirect a traversal outside the approved root.
+fn is_reparse_point(path: &Path) -> bool {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileAttributesW, FILE_ATTRIBUTE_REPARSE_POINT, INVALID_FILE_ATTRIBUTES,
+    };
+
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    // SAFETY: `wide` is NUL-terminated and survives the Win32 call.
+    let attributes = unsafe { GetFileAttributesW(wide.as_ptr()) };
+    attributes == INVALID_FILE_ATTRIBUTES || attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+/// Open the object itself (not a junction/symlink target) and read the NTFS
+/// volume serial + file index pair. `FILE_FLAG_OPEN_REPARSE_POINT` makes a
+/// reparse-point swap fail closed even if it happens between the guard's
+/// attribute check and this identity capture.
+fn file_identity(path: &Path) -> Option<super::PathIdentity> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
+
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    // SAFETY: path is NUL-terminated, no security attributes are supplied,
+    // and the flags open the directory/file object without following a
+    // reparse point.
+    let handle = unsafe {
+        CreateFileW(
+            wide.as_ptr(),
+            FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+            0,
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        return None;
+    }
+    let mut info = BY_HANDLE_FILE_INFORMATION::default();
+    // SAFETY: `handle` is valid and `info` is a writable output buffer.
+    let ok = unsafe { GetFileInformationByHandle(handle, &mut info) };
+    // SAFETY: `handle` is owned by this function and is closed exactly once.
+    unsafe { CloseHandle(handle) };
+    if ok == 0 || info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return None;
+    }
+    Some(super::PathIdentity::new(
+        info.dwVolumeSerialNumber as u64,
+        ((info.nFileIndexHigh as u64) << 32) | info.nFileIndexLow as u64,
+    ))
 }
 
 fn logical_drives() -> Vec<PathBuf> {
@@ -142,5 +239,48 @@ mod tests {
         assert!(is_user_visible_drive(DRIVE_FIXED));
         assert!(is_user_visible_drive(DRIVE_REMOVABLE));
         assert!(!is_user_visible_drive(4)); // DRIVE_REMOTE
+    }
+
+    #[test]
+    fn protects_recycle_and_volume_metadata_on_every_drive() {
+        assert!(has_protected_volume_component(Path::new(
+            "C:\\$Recycle.Bin\\S-1-5-21"
+        )));
+        assert!(has_protected_volume_component(Path::new(
+            "D:\\System Volume Information\\IndexerVolumeGuid"
+        )));
+        assert!(!has_protected_volume_component(Path::new(
+            "C:\\Users\\chystik\\cache"
+        )));
+    }
+
+    #[test]
+    fn storage_volumes_report_a_real_local_drive_with_sane_capacity() {
+        let volumes = ADAPTER.storage_volumes();
+        assert!(
+            !volumes.is_empty(),
+            "Windows must expose its fixed system volume to the Disks view"
+        );
+        for volume in volumes {
+            assert!(volume.mount_point.is_absolute());
+            assert!(volume.total_bytes > 0);
+            assert!(volume.free_bytes <= volume.total_bytes);
+            assert_eq!(volume.fs_type, "windows");
+        }
+    }
+
+    #[test]
+    fn privacy_roots_are_absolute_and_keep_roaming_separate_from_local() {
+        let roots = ADAPTER.privacy_roots();
+        assert!(roots.home_dir.is_absolute());
+        assert!(roots
+            .roaming_dir
+            .as_ref()
+            .is_some_and(|path| path.is_absolute()));
+        assert!(roots
+            .local_dir
+            .as_ref()
+            .is_some_and(|path| path.is_absolute()));
+        assert_ne!(roots.roaming_dir, roots.local_dir);
     }
 }

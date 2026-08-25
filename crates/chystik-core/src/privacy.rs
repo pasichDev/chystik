@@ -18,8 +18,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::model::Severity;
-use crate::platform::PlatformKind;
-use crate::rules::home_root;
+use crate::platform::{PlatformKind, PrivacyRoots};
 
 /// What kind of trace this is. Groups the list into something readable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -76,6 +75,21 @@ struct Trace {
     severity: Severity,
     reveals: &'static str,
     cost: &'static str,
+}
+
+/// Which adapter-owned base contains an explicit trace. Keeping this next to
+/// the catalogue makes a Windows profile relocation a data concern, not a
+/// GUI deletion exception.
+#[derive(Debug, Clone, Copy)]
+enum TraceRoot {
+    Home,
+    Roaming,
+    Local,
+}
+
+struct TraceGroup {
+    root: TraceRoot,
+    traces: &'static [Trace],
 }
 
 const LINUX_TRACES: &[Trace] = &[
@@ -276,11 +290,112 @@ const MACOS_TRACES: &[Trace] = &[
     },
 ];
 
-fn trace_table() -> &'static [Trace] {
+/// Windows application data is split by the OS between a roaming profile and
+/// a machine-local profile. Every path here is a single documented trace;
+/// profile globs are deliberately avoided so an unknown browser layout is
+/// never deleted by inference.
+const WINDOWS_ROAMING_TRACES: &[Trace] = &[
+    Trace {
+        rel: "Microsoft/Windows/PowerShell/PSReadLine/ConsoleHost_history.txt",
+        kind: TraceKind::ShellHistory,
+        severity: Severity::Moderate,
+        reveals: "every command entered in Windows PowerShell, including pasted secrets",
+        cost: "PowerShell history search and recall start from nothing",
+    },
+    Trace {
+        rel: "Microsoft/Windows/Recent",
+        kind: TraceKind::RecentActivity,
+        severity: Severity::Moderate,
+        reveals: "recent files, folders and application jump-list activity",
+        cost: "Windows Recent Items and jump-list suggestions are rebuilt from nothing",
+    },
+];
+
+const WINDOWS_LOCAL_TRACES: &[Trace] = &[
+    Trace {
+        rel: "Google/Chrome/User Data/Default/History",
+        kind: TraceKind::Browsing,
+        severity: Severity::Risky,
+        reveals: "every Chrome page visited, with timestamps, downloads and search terms",
+        cost: "Chrome address-bar suggestions and history search are gone permanently",
+    },
+    Trace {
+        rel: "Google/Chrome/User Data/Default/Network/Cookies",
+        kind: TraceKind::Browsing,
+        severity: Severity::Risky,
+        reveals: "which Chrome sites you are signed in to, and the trackers that follow you",
+        cost: "Chrome signs you out of the sites whose cookies are cleared",
+    },
+    Trace {
+        rel: "Chromium/User Data/Default/History",
+        kind: TraceKind::Browsing,
+        severity: Severity::Risky,
+        reveals: "every Chromium page visited, with timestamps, downloads and search terms",
+        cost: "Chromium address-bar suggestions and history search are gone permanently",
+    },
+    Trace {
+        rel: "Chromium/User Data/Default/Network/Cookies",
+        kind: TraceKind::Browsing,
+        severity: Severity::Risky,
+        reveals: "which Chromium sites you are signed in to, and the trackers that follow you",
+        cost: "Chromium signs you out of the sites whose cookies are cleared",
+    },
+    Trace {
+        rel: "Microsoft/Edge/User Data/Default/History",
+        kind: TraceKind::Browsing,
+        severity: Severity::Risky,
+        reveals: "every Edge page visited, with timestamps, downloads and search terms",
+        cost: "Edge address-bar suggestions and history search are gone permanently",
+    },
+    Trace {
+        rel: "Microsoft/Edge/User Data/Default/Network/Cookies",
+        kind: TraceKind::Browsing,
+        severity: Severity::Risky,
+        reveals: "which Edge sites you are signed in to, and the trackers that follow you",
+        cost: "Edge signs you out of the sites whose cookies are cleared",
+    },
+];
+
+const LINUX_TRACE_GROUPS: &[TraceGroup] = &[TraceGroup {
+    root: TraceRoot::Home,
+    traces: LINUX_TRACES,
+}];
+
+const MACOS_TRACE_GROUPS: &[TraceGroup] = &[TraceGroup {
+    root: TraceRoot::Home,
+    traces: MACOS_TRACES,
+}];
+
+const WINDOWS_TRACE_GROUPS: &[TraceGroup] = &[
+    TraceGroup {
+        root: TraceRoot::Roaming,
+        traces: WINDOWS_ROAMING_TRACES,
+    },
+    TraceGroup {
+        root: TraceRoot::Local,
+        traces: WINDOWS_LOCAL_TRACES,
+    },
+];
+
+fn trace_groups() -> &'static [TraceGroup] {
     match crate::platform::current().kind() {
-        PlatformKind::Linux => LINUX_TRACES,
-        PlatformKind::MacOS => MACOS_TRACES,
-        PlatformKind::Windows | PlatformKind::Unsupported => &[],
+        PlatformKind::Linux => LINUX_TRACE_GROUPS,
+        PlatformKind::MacOS => MACOS_TRACE_GROUPS,
+        PlatformKind::Windows => WINDOWS_TRACE_GROUPS,
+        PlatformKind::Unsupported => &[],
+    }
+}
+
+#[cfg(test)]
+fn all_traces() -> impl Iterator<Item = &'static Trace> {
+    trace_groups().iter().flat_map(|group| group.traces.iter())
+}
+
+fn root_for(group: TraceRoot, roots: &PrivacyRoots) -> Option<&Path> {
+    match group {
+        TraceRoot::Home => Some(&roots.home_dir),
+        TraceRoot::Roaming => roots.roaming_dir.as_deref(),
+        TraceRoot::Local => roots.local_dir.as_deref(),
     }
 }
 
@@ -289,22 +404,50 @@ fn trace_table() -> &'static [Trace] {
 /// Absent paths are simply not reported: a machine with no Chrome never
 /// sees a Chrome row.
 pub fn probe() -> Vec<PrivacyItem> {
-    let Some(home) = home_root() else {
-        return Vec::new();
-    };
-    let mut items: Vec<PrivacyItem> = trace_table()
+    probe_from_roots(&crate::platform::current().privacy_roots())
+}
+
+fn probe_from_roots(roots: &PrivacyRoots) -> Vec<PrivacyItem> {
+    let mut items: Vec<PrivacyItem> = trace_groups()
         .iter()
-        .filter_map(|trace| probe_one(&home, trace))
+        .flat_map(|group| {
+            root_for(group.root, roots)
+                .into_iter()
+                .flat_map(move |root| {
+                    group
+                        .traces
+                        .iter()
+                        .filter_map(move |trace| probe_one(root, trace))
+                })
+        })
         .collect();
     items.sort_by_key(|i| std::cmp::Reverse(i.size_bytes));
     items
+}
+
+/// The exact approved root for a listed trace. It is intentionally derived
+/// from the same table as [`probe`], so the GUI cannot widen Windows cleanup
+/// to `$HOME` or guess a parent directory when a profile is relocated.
+pub fn cleanup_root_for(path: &Path) -> Option<PathBuf> {
+    cleanup_root_for_in(path, &crate::platform::current().privacy_roots())
+}
+
+fn cleanup_root_for_in(path: &Path, roots: &PrivacyRoots) -> Option<PathBuf> {
+    trace_groups().iter().find_map(|group| {
+        let root = root_for(group.root, roots)?;
+        group
+            .traces
+            .iter()
+            .any(|trace| root.join(trace.rel) == path)
+            .then(|| root.to_path_buf())
+    })
 }
 
 fn probe_one(home: &Path, trace: &Trace) -> Option<PrivacyItem> {
     let path = home.join(trace.rel);
     let meta = std::fs::symlink_metadata(&path).ok()?;
     // Never report a link: clearing it would act on wherever it points.
-    if meta.file_type().is_symlink() {
+    if meta.file_type().is_symlink() || crate::platform::current().is_link_or_reparse_point(&path) {
         return None;
     }
     let host = crate::platform::current();
@@ -339,7 +482,7 @@ fn tree_size(dir: &Path) -> (u64, Option<DateTime<Utc>>) {
             let Ok(meta) = std::fs::symlink_metadata(entry.path()) else {
                 continue;
             };
-            if meta.file_type().is_dir() {
+            if meta.file_type().is_dir() && !host.is_link_or_reparse_point(&entry.path()) {
                 stack.push(entry.path());
             } else if meta.file_type().is_file() {
                 bytes += host.allocated_bytes(&meta);
@@ -359,10 +502,9 @@ fn tree_size(dir: &Path) -> (u64, Option<DateTime<Utc>>) {
 mod tests {
     use super::*;
 
-    #[cfg(unix)]
     #[test]
     fn every_trace_explains_itself() {
-        for trace in trace_table() {
+        for trace in all_traces() {
             assert!(
                 trace.reveals.len() > 25,
                 "{}: `reveals` is the whole product; it cannot be a label",
@@ -371,7 +513,7 @@ mod tests {
             assert!(trace.cost.len() > 10, "{}: no cost stated", trace.rel);
             assert!(
                 !trace.rel.starts_with('/'),
-                "{}: must be $HOME-relative",
+                "{}: must be relative to its platform privacy root",
                 trace.rel
             );
         }
@@ -382,7 +524,7 @@ mod tests {
     /// it genuinely costs nothing.
     #[test]
     fn browsing_and_credentials_are_never_marked_safe() {
-        for trace in trace_table() {
+        for trace in all_traces() {
             if matches!(trace.kind, TraceKind::Browsing) || trace.rel.contains("keyrings") {
                 assert_ne!(
                     trace.severity,
@@ -419,8 +561,7 @@ mod tests {
         std::fs::write(&real, "secrets").unwrap();
         std::os::unix::fs::symlink(&real, home.path().join(".bash_history")).unwrap();
 
-        let trace = trace_table()
-            .iter()
+        let trace = all_traces()
             .find(|trace| trace.rel == ".bash_history")
             .expect("every supported Unix host has bash history in the table");
         assert_eq!(trace.rel, ".bash_history");
@@ -448,5 +589,46 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].path, history);
         assert_eq!(items[0].kind, TraceKind::Browsing);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_probe_uses_roaming_and_local_profile_roots() {
+        let fixture = tempfile::tempdir().unwrap();
+        let home = fixture.path().join("home");
+        let roaming = fixture.path().join("redirected-roaming");
+        let local = fixture.path().join("redirected-local");
+        let powershell =
+            roaming.join("Microsoft/Windows/PowerShell/PSReadLine/ConsoleHost_history.txt");
+        let edge = local.join("Microsoft/Edge/User Data/Default/History");
+        std::fs::create_dir_all(powershell.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(edge.parent().unwrap()).unwrap();
+        std::fs::write(&powershell, "Get-Content $env:SECRET").unwrap();
+        std::fs::write(&edge, "browsing history").unwrap();
+        let roots = PrivacyRoots {
+            home_dir: home,
+            roaming_dir: Some(roaming.clone()),
+            local_dir: Some(local.clone()),
+        };
+
+        let items = probe_from_roots(&roots);
+
+        assert_eq!(items.len(), 2);
+        assert!(items.iter().any(|item| item.path == powershell));
+        assert!(items.iter().any(|item| item.path == edge));
+        assert_eq!(cleanup_root_for_in(&powershell, &roots), Some(roaming));
+        assert_eq!(cleanup_root_for_in(&edge, &roots), Some(local));
+        assert!(
+            crate::guard::check(
+                &powershell,
+                &cleanup_root_for_in(&powershell, &roots).unwrap()
+            )
+            .is_ok(),
+            "the exact Windows privacy root must reach the cleanup guard"
+        );
+        assert!(
+            crate::guard::check(&powershell, &roots.home_dir).is_err(),
+            "a redirected roaming profile must not be silently widened to $HOME"
+        );
     }
 }

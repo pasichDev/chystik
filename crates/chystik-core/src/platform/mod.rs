@@ -58,6 +58,34 @@ pub struct AppPaths {
     pub cache_dir: PathBuf,
 }
 
+/// Platform-owned bases for explicit privacy traces.
+///
+/// The privacy catalogue names only a relative suffix. The adapter owns the
+/// OS-specific base (for example Windows' roaming versus local profile), so
+/// callers never guess environment-variable paths or loosen a deletion root.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PrivacyRoots {
+    pub home_dir: PathBuf,
+    pub roaming_dir: Option<PathBuf>,
+    pub local_dir: Option<PathBuf>,
+}
+
+/// An opaque stable identity for an object already approved by the guard.
+///
+/// Each adapter uses the host's native file identity where it has one. The
+/// cleaner compares this immediately before handing a path to native Trash.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PathIdentity {
+    first: u64,
+    second: u64,
+}
+
+impl PathIdentity {
+    pub(crate) const fn new(first: u64, second: u64) -> Self {
+        Self { first, second }
+    }
+}
+
 /// A mounted user-visible volume.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StorageVolume {
@@ -78,12 +106,17 @@ pub struct StorageStats {
 trait Adapter: Send + Sync {
     fn kind(&self) -> PlatformKind;
     fn app_paths(&self) -> AppPaths;
+    fn privacy_roots(&self) -> PrivacyRoots;
     fn storage_volumes(&self) -> Vec<StorageVolume>;
     fn unscannable_roots(&self) -> Vec<PathBuf>;
     fn default_skip_roots(&self) -> Vec<PathBuf>;
     fn storage_stats(&self, path: &Path) -> Option<StorageStats>;
     fn allocated_bytes(&self, metadata: &Metadata) -> u64;
+    fn path_identity(&self, path: &Path) -> Option<PathIdentity>;
     fn is_protected_system_path(&self, path: &Path) -> bool;
+    /// True for a symlink or any host-specific indirection such as a Windows
+    /// junction. Errors are treated as unsafe by implementations.
+    fn is_link_or_reparse_point(&self, path: &Path) -> bool;
     fn cleanup_support(&self) -> CleanupSupport;
 }
 
@@ -104,6 +137,10 @@ impl Platform {
 
     pub fn app_paths(self) -> AppPaths {
         self.adapter.app_paths()
+    }
+
+    pub(crate) fn privacy_roots(self) -> PrivacyRoots {
+        self.adapter.privacy_roots()
     }
 
     pub fn storage_volumes(self) -> Vec<StorageVolume> {
@@ -127,8 +164,16 @@ impl Platform {
         self.adapter.allocated_bytes(metadata)
     }
 
+    pub(crate) fn path_identity(self, path: &Path) -> Option<PathIdentity> {
+        self.adapter.path_identity(path)
+    }
+
     pub fn is_protected_system_path(self, path: &Path) -> bool {
         self.adapter.is_protected_system_path(path)
+    }
+
+    pub(crate) fn is_link_or_reparse_point(self, path: &Path) -> bool {
+        self.adapter.is_link_or_reparse_point(path)
     }
 
     pub fn cleanup_support(self) -> CleanupSupport {
@@ -196,6 +241,35 @@ fn app_dir_or_current(base: Option<PathBuf>, suffix: &[&str]) -> PathBuf {
         path.push(segment);
     }
     path
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+fn portable_path_identity(path: &Path) -> Option<PathIdentity> {
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    (!meta.file_type().is_symlink()).then(|| {
+        let modified = meta
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |duration| {
+                duration.as_nanos().min(u64::MAX as u128) as u64
+            });
+        PathIdentity::new(meta.len(), modified)
+    })
+}
+
+#[cfg(unix)]
+fn unix_path_identity(path: &Path) -> Option<PathIdentity> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    (!meta.file_type().is_symlink()).then(|| PathIdentity::new(meta.dev(), meta.ino()))
+}
+
+#[cfg(unix)]
+fn unix_is_link(path: &Path) -> bool {
+    std::fs::symlink_metadata(path)
+        .map(|meta| meta.file_type().is_symlink())
+        .unwrap_or(true)
 }
 
 fn is_under(path: &Path, root: &Path, case_insensitive: bool) -> bool {
@@ -302,13 +376,10 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     #[test]
-    fn windows_policy_is_scan_only_and_protects_children_of_every_system_root() {
+    fn windows_policy_uses_native_trash_and_protects_children_of_every_system_root() {
         let host = current();
         assert_eq!(host.kind(), PlatformKind::Windows);
-        assert!(matches!(
-            host.cleanup_support(),
-            CleanupSupport::ScanOnly { .. }
-        ));
+        assert_eq!(host.cleanup_support(), CleanupSupport::NativeTrash);
         for root in host.default_skip_roots() {
             assert!(
                 host.is_protected_system_path(&root.join("chystik-test-child")),

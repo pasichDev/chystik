@@ -1,9 +1,11 @@
 //! Opt-in integration evidence for the real desktop recovery mechanism.
 //!
 //! This is ignored by default because it deliberately moves a fixture into the
-//! host Trash. CI invokes it with an isolated home on Linux and macOS.
+//! host Trash. CI invokes it with an isolated home where the host supports
+//! that; the Windows assertion additionally proves the fixture is visible in
+//! the Recycle Bin rather than merely absent from its source path.
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 mod native_trash {
     use chystik_core::cleaner::{clean, CleanupItem, SystemTrash};
 
@@ -34,5 +36,20 @@ mod native_trash {
             !target.exists(),
             "the fixture must leave the source directory through native Trash"
         );
+
+        #[cfg(target_os = "windows")]
+        {
+            let recycle_bin_item = trash::os_limited::list()
+                .expect("enumerate the native Windows Recycle Bin")
+                .into_iter()
+                .find(|item| item.original_path() == target)
+                .expect("the fixture must be recoverable from the Windows Recycle Bin");
+            trash::os_limited::restore_all([recycle_bin_item])
+                .expect("restore the recoverable fixture through the Windows Recycle Bin");
+            assert!(
+                target.is_file(),
+                "the restored fixture must return to its source path"
+            );
+        }
     }
 }

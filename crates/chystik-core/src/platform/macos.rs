@@ -26,6 +26,14 @@ impl Adapter for MacOS {
         }
     }
 
+    fn privacy_roots(&self) -> super::PrivacyRoots {
+        super::PrivacyRoots {
+            home_dir: super::home_dir_or_current(),
+            roaming_dir: None,
+            local_dir: None,
+        }
+    }
+
     fn storage_volumes(&self) -> Vec<StorageVolume> {
         let mut roots = vec![PathBuf::from("/")];
         if let Ok(entries) = std::fs::read_dir("/Volumes") {
@@ -80,6 +88,10 @@ impl Adapter for MacOS {
         metadata.blocks().saturating_mul(512)
     }
 
+    fn path_identity(&self, path: &Path) -> Option<super::PathIdentity> {
+        super::unix_path_identity(path)
+    }
+
     fn is_protected_system_path(&self, path: &Path) -> bool {
         path == Path::new("/")
             || [
@@ -96,6 +108,10 @@ impl Adapter for MacOS {
             .iter()
             .map(Path::new)
             .any(|root| super::is_under(path, root, false))
+    }
+
+    fn is_link_or_reparse_point(&self, path: &Path) -> bool {
+        super::unix_is_link(path)
     }
 
     fn cleanup_support(&self) -> CleanupSupport {

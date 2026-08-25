@@ -40,11 +40,12 @@ The workspace version in `Cargo.toml`, `packaging/arch/PKGBUILD`'s `pkgver`,
 the matching `CHANGELOG.md` section, and a release tag must be identical:
 `0.1.0` becomes `v0.1.0` and `## [0.1.0] - YYYY-MM-DD`. The release workflow
 refuses a mismatch, a missing changelog section, a tag outside `main`, or an
-existing GitHub Release. Stable `MAJOR.MINOR.PATCH` tags are the only Linux
-release inputs; a tag creates the Release from that changelog section and
-uploads the three Linux artifacts plus `SHA256SUMS`.
+existing GitHub Release. Stable `MAJOR.MINOR.PATCH` tags are the only release
+inputs; a tag creates the Release from that changelog section only after the
+Linux and both portable Windows artifacts succeed, then uploads them with one
+`SHA256SUMS` manifest.
 
-### Cutting a Linux release
+### Cutting a release
 
 After the version/changelog PR is merged, tag the exact `main` commit with an
 annotated tag and push only that tag:

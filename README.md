@@ -33,11 +33,12 @@ what you choose to the desktop trash, never straight to `unlink`.
   never included in a bulk selection.
 - **Refuses to do damage.** Every path passes through a guard before deletion:
   system directories, `.git`, `.ssh`, `.gnupg` and your settings are rejected
-  outright, symlinks are never followed, and the scan root itself is never
-  deletable.
-- **Fail-closed cleanup.** Linux and macOS deletion go through their native
-  desktop Trash. On a platform without a verified native-trash adapter,
-  cleanup is disabled rather than falling back to direct deletion.
+  outright, symlinks and Windows reparse points are never followed, and the
+  scan root itself is never deletable.
+- **Fail-closed cleanup.** Linux, macOS and Windows deletion go through their
+  native desktop recovery mechanisms. On a platform without a verified
+  native-trash adapter, cleanup is disabled rather than falling back to direct
+  deletion.
 - **Fast.** A full Linux scan of `/` on a developer machine takes about a second:
   a parallel `jwalk` walk that prunes a subtree as soon as it is classified,
   and skips pseudo, read-only and network mounts entirely.
@@ -130,6 +131,23 @@ makepkg -si
 The AppImage is a portable x86_64 release target, not a claim that every
 distribution, desktop environment, glibc version, or graphics stack is
 certified. See the support matrix for the tested environments and limitations.
+
+### Windows release artifacts
+
+Tagged releases also publish portable ZIP archives. Extract one archive and
+run `Chystik.exe`; no installer, administrator rights, or direct-delete mode
+is involved.
+
+```powershell
+Expand-Archive .\Chystik-<version>-windows-x86_64.zip -DestinationPath .\Chystik
+.\Chystik\Chystik.exe
+```
+
+`windows-x86_64` is the release target for 64-bit Windows 10 and Windows 11.
+`windows-aarch64` is the native ARM64 archive for Windows 11 on Arm. Archives
+are checksummed in `SHA256SUMS`; they are not code-signed yet, so Windows may
+show a SmartScreen warning. See the support matrix for the distinction between
+native CI evidence and a Windows 10 desktop acceptance run.
 
 ## Usage
 

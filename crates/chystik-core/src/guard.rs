@@ -79,7 +79,9 @@ pub fn check(candidate: &Path, scan_root: &Path) -> Result<(), ChystikError> {
     let Ok(meta) = std::fs::symlink_metadata(candidate) else {
         return refuse();
     };
-    if meta.file_type().is_symlink() {
+    if meta.file_type().is_symlink()
+        || crate::platform::current().is_link_or_reparse_point(candidate)
+    {
         return refuse();
     }
     if candidate == scan_root || !candidate.starts_with(scan_root) {
@@ -124,7 +126,12 @@ fn has_symlinked_ancestor(candidate: &Path, scan_root: &Path) -> bool {
     for component in components {
         walked.push(component);
         match std::fs::symlink_metadata(&walked) {
-            Ok(meta) if meta.file_type().is_symlink() => return true,
+            Ok(meta)
+                if meta.file_type().is_symlink()
+                    || crate::platform::current().is_link_or_reparse_point(&walked) =>
+            {
+                return true;
+            }
             Ok(_) => {}
             Err(_) => return true, // cannot vouch for it, so refuse
         }
@@ -159,7 +166,7 @@ fn is_protected_location(path: &Path, original: &Path) -> bool {
 /// (used to avoid wasting time in system trees).
 pub fn is_scannable(dir: &Path) -> bool {
     std::fs::symlink_metadata(dir)
-        .map(|m| m.is_dir())
+        .map(|m| m.is_dir() && !crate::platform::current().is_link_or_reparse_point(dir))
         .unwrap_or(false)
 }
 
@@ -274,6 +281,36 @@ mod tests {
         let link = root.path().join("link");
         std::os::unix::fs::symlink(&real, &link).unwrap();
         assert!(check(&link, root.path()).is_err());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn rejects_a_junction_before_scanning_or_cleanup() {
+        let root = tempdir().unwrap();
+        let real = root.path().join("real-cache");
+        let target = real.join("deletable");
+        std::fs::create_dir_all(&target).unwrap();
+        let junction = root.path().join("cache-junction");
+        let command = format!(
+            "mklink /J \"{}\" \"{}\"",
+            junction.display(),
+            real.display()
+        );
+        let status = std::process::Command::new("cmd")
+            .args(["/C", &command])
+            .status()
+            .expect("Windows must provide cmd.exe for junction coverage");
+        assert!(status.success(), "create a junction fixture");
+
+        assert!(
+            !is_scannable(&junction),
+            "the scanner must not descend through a Windows junction"
+        );
+        assert!(
+            check(&junction.join("deletable"), root.path()).is_err(),
+            "the cleanup guard must reject a reparse-point ancestor"
+        );
+        std::fs::remove_dir(&junction).expect("remove only the junction, not its target");
     }
 
     #[test]

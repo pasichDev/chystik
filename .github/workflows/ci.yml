@@ -57,12 +57,21 @@ jobs:
         run: cargo build --workspace --release
 
   platform-compile:
-    name: native compile · ${{ matrix.os }}
+    name: native platform · ${{ matrix.name }}
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+        include:
+          - name: macOS
+            runner: macos-latest
+            native_trash: true
+          - name: Windows x64
+            runner: windows-2022
+            native_trash: true
+          - name: Windows 11 ARM64
+            runner: windows-11-arm
+            native_trash: true
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
@@ -74,16 +83,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       # Compile target-selected adapters and every test/example source on
-      # their native host. Windows remains scan-only; macOS additionally
-      # runs its native Trash evidence below.
+      # their native host. The native Trash integration test proves desktop
+      # recovery instead of only checking that a source path disappeared.
       - name: Compile all targets
         run: cargo check --workspace --all-targets
 
       - name: Core safety tests
         run: cargo test -p chystik-core --lib
 
-      - name: Native macOS Trash smoke
-        if: matrix.os == 'macos-latest'
+      - name: Native Trash / Recycle Bin smoke
+        if: matrix.native_trash
         run: cargo test -p chystik-core --test native_trash -- --ignored --exact
 
   linux-packages:

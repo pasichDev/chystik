@@ -73,65 +73,25 @@ fn move_to_trash(path: &Path) -> Result<(), trash::Error> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Enough of a path's identity to notice it was swapped underneath us.
 ///
-/// Device and inode together identify a filesystem object. A symlink put in
-/// place of a validated directory has a different inode, so comparing this
-/// immediately before removal catches the substitution.
-#[cfg(unix)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FileIdentity {
-    device: u64,
-    inode: u64,
-    is_symlink: bool,
-}
+/// The platform adapter supplies a native object identity (device/inode on
+/// Unix; volume serial/file index on Windows) without following a link or a
+/// reparse point. Comparing it immediately before removal catches a changed
+/// target and makes reparse-point substitution fail closed.
+pub struct FileIdentity(crate::platform::PathIdentity);
 
-/// Non-Unix fallback identity. It is never used to enable cleanup: platforms
-/// without a verified native-trash adapter are stopped before this point.
-#[cfg(not(unix))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FileIdentity {
-    len: u64,
-    modified: Option<std::time::SystemTime>,
-    is_dir: bool,
-    is_symlink: bool,
-}
-
-#[cfg(unix)]
 impl FileIdentity {
-    /// Read without following symlinks. `None` when the path is gone.
+    /// Read a stable host identity without following a link or reparse point.
+    /// `None` means the object is gone or cannot be proven safe.
     pub fn of(path: &Path) -> Option<Self> {
-        use std::os::unix::fs::MetadataExt;
-        let meta = std::fs::symlink_metadata(path).ok()?;
-        Some(Self {
-            device: meta.dev(),
-            inode: meta.ino(),
-            is_symlink: meta.file_type().is_symlink(),
-        })
+        platform::current().path_identity(path).map(Self)
     }
 
-    /// True when `path` is still the very same object, and still not a link.
+    /// True when `path` is still the very same, non-indirected object.
     pub fn still_matches(&self, path: &Path) -> bool {
-        !self.is_symlink && Self::of(path).is_some_and(|now| now == *self)
-    }
-}
-
-#[cfg(not(unix))]
-impl FileIdentity {
-    /// Read without following symlinks. `None` when the path is gone.
-    pub fn of(path: &Path) -> Option<Self> {
-        let meta = std::fs::symlink_metadata(path).ok()?;
-        Some(Self {
-            len: meta.len(),
-            modified: meta.modified().ok(),
-            is_dir: meta.is_dir(),
-            is_symlink: meta.file_type().is_symlink(),
-        })
-    }
-
-    /// This fallback is defense in depth only; cleanup is scan-only here.
-    pub fn still_matches(&self, path: &Path) -> bool {
-        !self.is_symlink && Self::of(path).is_some_and(|now| now == *self)
+        Self::of(path).is_some_and(|now| now == *self)
     }
 }
 
@@ -349,7 +309,7 @@ mod tests {
         ));
     }
 
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     #[test]
     fn current_scan_only_platform_never_hands_a_path_to_the_remover() {
         let root = tempdir().unwrap();
@@ -369,7 +329,7 @@ mod tests {
         ));
     }
 
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     #[test]
     fn system_trash_itself_refuses_on_a_scan_only_platform() {
         let CleanupSupport::ScanOnly { reason } = platform::current().cleanup_support() else {
@@ -394,6 +354,31 @@ mod tests {
         assert_eq!(outcome.freed_bytes, 25);
         assert!(outcome.skipped.is_empty());
         assert!(!target.exists());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_identity_refuses_a_junction_object() {
+        let root = tempdir().unwrap();
+        let real = root.path().join("real-cache");
+        std::fs::create_dir_all(&real).unwrap();
+        let junction = root.path().join("cache-junction");
+        let command = format!(
+            "mklink /J \"{}\" \"{}\"",
+            junction.display(),
+            real.display()
+        );
+        let status = std::process::Command::new("cmd")
+            .args(["/C", &command])
+            .status()
+            .expect("Windows must provide cmd.exe for junction coverage");
+        assert!(status.success(), "create a junction fixture");
+
+        assert!(
+            FileIdentity::of(&junction).is_none(),
+            "the identity guard must not follow a Windows junction"
+        );
+        std::fs::remove_dir(&junction).expect("remove only the junction, not its target");
     }
 
     /// The whole point of the abstraction: a refused path must never reach

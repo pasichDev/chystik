@@ -25,6 +25,14 @@ impl Adapter for Unsupported {
         }
     }
 
+    fn privacy_roots(&self) -> super::PrivacyRoots {
+        super::PrivacyRoots {
+            home_dir: super::home_dir_or_current(),
+            roaming_dir: None,
+            local_dir: None,
+        }
+    }
+
     fn storage_volumes(&self) -> Vec<StorageVolume> {
         Vec::new()
     }
@@ -45,8 +53,18 @@ impl Adapter for Unsupported {
         metadata.len()
     }
 
+    fn path_identity(&self, path: &Path) -> Option<super::PathIdentity> {
+        super::portable_path_identity(path)
+    }
+
     fn is_protected_system_path(&self, _path: &Path) -> bool {
         false
+    }
+
+    fn is_link_or_reparse_point(&self, path: &Path) -> bool {
+        std::fs::symlink_metadata(path)
+            .map(|meta| meta.file_type().is_symlink())
+            .unwrap_or(true)
     }
 
     fn cleanup_support(&self) -> CleanupSupport {

@@ -185,7 +185,6 @@ impl ChystikApp {
     pub(crate) fn clear_selected_traces(&mut self) {
         use chystik_core::cleaner::{self, CleanupItem};
 
-        let home = Some(platform::current().app_paths().home_dir);
         let items: Vec<CleanupItem> = self
             .traces_selected
             .iter()
@@ -193,9 +192,10 @@ impl ChystikApp {
             .map(|trace| CleanupItem {
                 path: trace.path.clone(),
                 size_bytes: trace.size_bytes,
-                // Traces live in $HOME by construction, so that is the root
-                // the guard validates against.
-                scan_root: home.clone(),
+                // The core catalogue resolves Windows roaming/local profile
+                // roots. It returns a root only for an exact listed trace,
+                // so UI state cannot widen cleanup to a guessed parent.
+                scan_root: chystik_core::privacy::cleanup_root_for(&trace.path),
             })
             .collect();
         if items.is_empty() {
@@ -917,6 +917,12 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_native_trash_capability_enables_gui_cleanup_actions() {
+        assert!(ChystikApp::default().cleanup_available());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_native_recycle_bin_capability_enables_gui_cleanup_actions() {
         assert!(ChystikApp::default().cleanup_available());
     }
 

@@ -158,7 +158,7 @@ pub fn drives() -> Vec<Drive> {
 /// a future native device adapter rather than manufacturing device data.
 #[cfg(not(target_os = "linux"))]
 pub fn drives() -> Vec<Drive> {
-    crate::platform::current()
+    let mut drives: Vec<Drive> = crate::platform::current()
         .storage_volumes()
         .into_iter()
         .filter(|volume| volume.total_bytes > 0)
@@ -168,8 +168,11 @@ pub fn drives() -> Vec<Drive> {
                 .file_name()
                 .and_then(|name| name.to_str())
                 .filter(|name| !name.is_empty())
-                .unwrap_or("root")
-                .to_owned();
+                .map(str::to_owned)
+                // A Windows volume root (`C:\\`) and Unix root (`/`) have no
+                // final filename component. Show the real mount label rather
+                // than the misleading generic word "root".
+                .unwrap_or_else(|| volume.mount_point.display().to_string());
             let mount = PartitionMount {
                 mount_point: volume.mount_point,
                 fs_type: volume.fs_type,
@@ -190,7 +193,9 @@ pub fn drives() -> Vec<Drive> {
                 partitions: vec![partition],
             }
         })
-        .collect()
+        .collect();
+    drives.sort_by_key(|drive| std::cmp::Reverse(drive.size_bytes));
+    drives
 }
 
 /// Total attached capacity across every drive.
@@ -501,5 +506,28 @@ mod tests {
             .mount
             .as_ref()
             .is_some_and(|mount| mount.free_bytes <= mount.total_bytes));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_disks_include_a_real_logical_volume_with_capacity() {
+        let drives = drives();
+        let drive = drives
+            .iter()
+            .find(|drive| {
+                drive.partitions.iter().any(|partition| {
+                    matches!(
+                        &partition.usage,
+                        PartitionUse::Filesystem(mount) if mount.mount_point.is_absolute()
+                    )
+                })
+            })
+            .expect("Windows must expose at least its fixed system volume");
+        assert!(drive.size_bytes > 0);
+        assert_ne!(drive.name, "root", "show the Windows volume label");
+        assert!(drive.partitions.iter().all(|partition| partition
+            .mount
+            .as_ref()
+            .is_some_and(|mount| mount.free_bytes <= mount.total_bytes)));
     }
 }
