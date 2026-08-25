@@ -254,6 +254,28 @@ fn app_dir_or_current(base: Option<PathBuf>, suffix: &[&str]) -> PathBuf {
     path
 }
 
+/// Create a directory junction without relying on shell-quoted paths.
+///
+/// `mklink` is a `cmd.exe` builtin. Passing the command and its path
+/// arguments separately lets Rust quote each path correctly, which matters
+/// for GitHub-hosted workspaces and user profiles that contain spaces.
+#[cfg(all(test, target_os = "windows"))]
+pub(crate) fn create_test_junction(link: &Path, target: &Path) -> std::io::Result<()> {
+    let output = std::process::Command::new("cmd")
+        .args(["/D", "/C", "mklink", "/J"])
+        .arg(link)
+        .arg(target)
+        .output()?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let detail = String::from_utf8_lossy(&output.stderr);
+    Err(std::io::Error::other(format!(
+        "mklink /J exited with {}: {detail}",
+        output.status
+    )))
+}
+
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 fn portable_path_identity(path: &Path) -> Option<PathIdentity> {
     let meta = std::fs::symlink_metadata(path).ok()?;

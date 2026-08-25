@@ -363,16 +363,7 @@ mod tests {
         let real = root.path().join("real-cache");
         std::fs::create_dir_all(&real).unwrap();
         let junction = root.path().join("cache-junction");
-        let command = format!(
-            "mklink /J \"{}\" \"{}\"",
-            junction.display(),
-            real.display()
-        );
-        let status = std::process::Command::new("cmd")
-            .args(["/C", &command])
-            .status()
-            .expect("Windows must provide cmd.exe for junction coverage");
-        assert!(status.success(), "create a junction fixture");
+        crate::platform::create_test_junction(&junction, &real).expect("create a junction fixture");
 
         assert!(
             FileIdentity::of(&junction).is_none(),
