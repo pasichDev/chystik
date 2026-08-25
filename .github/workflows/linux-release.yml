@@ -17,6 +17,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -29,6 +31,20 @@ jobs:
             bash packaging/linux/verify-version.sh "$GITHUB_REF_NAME"
           else
             bash packaging/linux/verify-version.sh
+          fi
+
+      - name: Verify tagged commit is on main
+        if: github.ref_type == 'tag'
+        run: |
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+
+      - name: Extract release notes
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == 'tag' ]]; then
+            bash packaging/linux/release-notes.sh "$GITHUB_REF_NAME" > "$RUNNER_TEMP/release-notes.md"
+          else
+            bash packaging/linux/release-notes.sh > "$RUNNER_TEMP/release-notes.md"
           fi
 
       - name: Package build dependencies
@@ -45,6 +61,7 @@ jobs:
           DIST_DIR="$RUNNER_TEMP/chystik-dist" bash packaging/linux/build-rpm.sh
           DIST_DIR="$RUNNER_TEMP/chystik-dist" bash packaging/linux/build-appimage.sh
           (cd "$RUNNER_TEMP/chystik-dist" && sha256sum -c ./*.sha256)
+          (cd "$RUNNER_TEMP/chystik-dist" && sha256sum -- *.AppImage *.deb *.rpm > SHA256SUMS && sha256sum -c SHA256SUMS)
           mkdir -p "$RUNNER_TEMP/chystik-extracted/deb" "$RUNNER_TEMP/chystik-extracted/rpm"
           dpkg-deb -x "$RUNNER_TEMP/chystik-dist"/*.deb "$RUNNER_TEMP/chystik-extracted/deb"
           rpm2cpio "$RUNNER_TEMP/chystik-dist"/*.rpm | (cd "$RUNNER_TEMP/chystik-extracted/rpm" && cpio -idm)
@@ -63,6 +80,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
-            gh release create "$GITHUB_REF_NAME" --generate-notes
-          gh release upload "$GITHUB_REF_NAME" "$RUNNER_TEMP/chystik-dist"/*
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "refusing to overwrite existing release $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            --verify-tag \
+            --fail-on-no-commits \
+            --title "Chystik ${GITHUB_REF_NAME#v}" \
+            --notes-file "$RUNNER_TEMP/release-notes.md" \
+            "$RUNNER_TEMP/chystik-dist"/*

@@ -35,7 +35,9 @@ jobs:
         run: cargo fmt --all --check
 
       - name: Release version contract
-        run: bash packaging/linux/tests/version-contract.sh
+        run: |
+          bash packaging/linux/tests/version-contract.sh
+          bash packaging/linux/tests/release-notes.sh
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings

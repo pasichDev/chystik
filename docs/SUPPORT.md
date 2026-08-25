@@ -73,11 +73,13 @@ MIT license without requiring root at runtime.
 ## Release and rollback policy
 
 A stable tag matching the exact Cargo version — for example `v0.1.0` for
-`version = "0.1.0"` — starts the Linux release workflow. It rejects version
-mismatches before building, then validates every artifact and creates the
-matching GitHub Release with the AppImage, its SHA-256 sidecar, the `.deb`,
-and the `.rpm`. Manual workflow runs upload review artifacts only; they do
-not publish a release.
+`version = "0.1.0"` — starts the Linux release workflow. The tagged commit
+must already be on `main`, and `CHANGELOG.md` must contain the matching dated
+section `## [0.1.0] - YYYY-MM-DD`; that section becomes the GitHub Release
+body. The workflow validates every artifact, then creates the release with the
+AppImage, its SHA-256 sidecar, the `.deb`, the `.rpm`, and a `SHA256SUMS`
+manifest for all distributable files. Manual workflow runs upload review
+artifacts only; they do not publish a release.
 
 If an artifact is wrong, remove that release asset and its checksum reference,
 mark the release as a bad build, fix the source, then publish a new tag. The

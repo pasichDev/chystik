@@ -21,6 +21,7 @@ bash packaging/linux/tests/native-packages.sh
 bash packaging/linux/tests/appimage-builder.sh
 bash packaging/linux/tests/arch-metadata.sh
 bash packaging/linux/tests/version-contract.sh
+bash packaging/linux/tests/release-notes.sh
 ```
 
 `native-packages.sh` builds the Debian package locally. CI runs it with
@@ -36,9 +37,28 @@ release, replace its `SKIP` checksum with the checksum of the immutable tag
 archive.
 
 The workspace version in `Cargo.toml`, `packaging/arch/PKGBUILD`'s `pkgver`,
-and a release tag must be identical: `0.1.0` becomes `v0.1.0`. The release
-workflow refuses a mismatch and never overwrites an existing GitHub Release
-asset. Stable `MAJOR.MINOR.PATCH` tags are the only Linux release inputs.
+the matching `CHANGELOG.md` section, and a release tag must be identical:
+`0.1.0` becomes `v0.1.0` and `## [0.1.0] - YYYY-MM-DD`. The release workflow
+refuses a mismatch, a missing changelog section, a tag outside `main`, or an
+existing GitHub Release. Stable `MAJOR.MINOR.PATCH` tags are the only Linux
+release inputs; a tag creates the Release from that changelog section and
+uploads the three Linux artifacts plus `SHA256SUMS`.
+
+### Cutting a Linux release
+
+After the version/changelog PR is merged, tag the exact `main` commit with an
+annotated tag and push only that tag:
+
+```bash
+git switch main
+git pull --ff-only origin main
+git tag -a v0.1.0 -m "Chystik 0.1.0"
+git push origin v0.1.0
+```
+
+The tag starts the release workflow. Do not move or reuse a release tag. If a
+published artifact is wrong, make a patch release with a new version and a new
+changelog section instead.
 
 ## Adding a cleanup rule
 
