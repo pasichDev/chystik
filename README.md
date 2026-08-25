@@ -91,7 +91,7 @@ sudo dnf install gcc pkgconf-pkg-config gtk3-devel
 On Arch Linux:
 
 ```bash
-sudo pacman -S --needed base-devel cargo pkgconf gtk3
+sudo pacman -S --needed base-devel cargo pkgconf gtk3 libxkbcommon-x11
 ```
 
 ### Linux release artifacts

@@ -142,9 +142,11 @@ jobs:
           - name: Fedora
             image: fedora:41
             setup: dnf -y install cargo rust gcc git gtk3-devel libxkbcommon-x11 pkgconf-pkg-config
+            runtime_check: rpm -q --quiet libxkbcommon-x11
           - name: Arch
             image: archlinux:latest
-            setup: pacman -Syu --noconfirm --needed base-devel git gtk3 libx11 libxkbcommon mesa pkgconf rust
+            setup: pacman -Syu --noconfirm --needed base-devel git gtk3 libx11 libxkbcommon libxkbcommon-x11 mesa pkgconf rust
+            runtime_check: pacman -Q --quiet libxkbcommon-x11
     steps:
       - uses: actions/checkout@v4
 
@@ -156,7 +158,7 @@ jobs:
             "${{ matrix.image }}" \
             /bin/bash -ceu '${{ matrix.setup }}
               cargo build --release --locked --package chystik-gui
-              ldd target/release/chystik-gui | grep -E "libgtk-3|libxkbcommon"'
+              ${{ matrix.runtime_check }}'
 
   icon:
     name: icon assets are in sync
