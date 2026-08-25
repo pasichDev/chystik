@@ -22,7 +22,7 @@ pub(super) fn recycle_to_bin(path: &Path) -> Result<(), String> {
     };
     use windows::Win32::UI::Shell::{
         FileOperation, IFileOperation, IShellItem, SHCreateItemFromParsingName, FOFX_EARLYFAILURE,
-        FOFX_RECYCLEONDELETE, FOF_NO_UI,
+        FOFX_RECYCLEONDELETE, FOF_ALLOWUNDO, FOF_NO_UI,
     };
 
     let canonical = std::fs::canonicalize(path)
@@ -41,7 +41,14 @@ pub(super) fn recycle_to_bin(path: &Path) -> Result<(), String> {
     let result = unsafe {
         (|| -> windows::core::Result<()> {
             let operation: IFileOperation = CoCreateInstance(&FileOperation, None, CLSCTX_ALL)?;
-            operation.SetOperationFlags(FOF_NO_UI | FOFX_EARLYFAILURE | FOFX_RECYCLEONDELETE)?;
+            // Keep the normal Shell undo/recycle mode enabled as the base
+            // contract, then require the stronger Windows 8+ recycle flag.
+            // Some supported Shell hosts reject FOFX_RECYCLEONDELETE without
+            // FOF_ALLOWUNDO with E_INVALIDARG instead of treating it as the
+            // documented recycle operation.
+            operation.SetOperationFlags(
+                FOF_NO_UI | FOF_ALLOWUNDO | FOFX_EARLYFAILURE | FOFX_RECYCLEONDELETE,
+            )?;
             let item: IShellItem = SHCreateItemFromParsingName(PCWSTR(wide.as_ptr()), None)?;
             operation.DeleteItem(&item, None)?;
             operation.PerformOperations()?;
