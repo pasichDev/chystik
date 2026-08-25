@@ -7,8 +7,11 @@
 **A safety-first disk-cleanup tool that knows what a directory *is*.**
 
 [![CI](https://github.com/pasichDev/chystik/actions/workflows/ci.yml/badge.svg)](https://github.com/pasichDev/chystik/actions/workflows/ci.yml)
+[![Pages](https://github.com/pasichDev/chystik/actions/workflows/pages.yml/badge.svg)](https://github.com/pasichDev/chystik/actions/workflows/pages.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.80%2B-orange.svg)](https://www.rust-lang.org)
+
+**[pasichdev.github.io/chystik](https://pasichdev.github.io/chystik/)**
 
 </div>
 
@@ -52,7 +55,17 @@ capabilities and release status.
 The category rail on the left answers *"what is worth doing?"*; the detail pane
 answers *"is this one safe?"*.
 
-<!-- Add a screenshot at docs/screenshot.png and it renders here. -->
+![Chystik after a full scan of a Linux system: the category rail on the left,
+findings with path, size, risk rating and last-used date on the
+right.](docs/img/screenshot-gui.png)
+
+Every row carries the sentence explaining what it is and how it comes back —
+`Go build cache — rebuilt automatically by 'go build'`. Findings that need a
+command you run yourself (old snap revisions, unused Flatpak runtimes) show
+that command instead of a checkbox, because Chystik will not run it for you.
+
+The interface follows your locale; the same view in Ukrainian is at
+[docs/img/screenshot-gui-uk.png](docs/img/screenshot-gui-uk.png).
 
 ## Install
 
@@ -216,6 +229,8 @@ crates/chystik-gui      the desktop application (egui/eframe)
   src/modals.rs         dialogs, including the first-run risk acknowledgement
   locales/*.json        translations — no Rust changes needed to add a language
 packaging/              desktop entry, icon renderer, installer
+site/                   the GitHub Pages site, published from main by pages.yml
+docs/img/               screenshots shared by this file and the site
 ```
 
 ## Contributing
