@@ -9,7 +9,7 @@ roots, allocated-byte accounting and cleanup capability. No frontend reads
 |---|---|---|---|
 | Linux x86_64 | Supported | Supported through native desktop trash | PR CI builds and smoke-tests AppImage, `.deb`, and `.rpm`; Ubuntu, Fedora, and Arch build/runtime dependencies are checked separately. |
 | macOS | Preview | Supported through native Trash | Native macOS CI compiles and tests the Trash flow. No signed/notarized app artifact yet. |
-| Windows 10/11 x64 | Preview | Supported through native Recycle Bin | Windows x64 CI runs guard/junction and Recycle Bin recovery evidence; tags build a portable ZIP. Hosted CI is Windows Server 2022, so a real Windows 10 desktop acceptance run remains required. |
+| Windows 10/11 x64 | Preview | Supported through native Recycle Bin | Windows x64 CI runs guard/junction and Recycle Bin item/byte evidence; tags build a portable ZIP. Hosted CI is Windows Server 2022, so a real Windows 10 desktop acceptance run remains required. |
 | Windows 11 ARM64 | Preview | Supported through native Recycle Bin | Native Windows 11 Arm runner builds, tests, and publishes a portable ARM64 ZIP. No signed installer yet. |
 | Other | Unsupported | Disabled (scan-only) | Builds retain a conservative fallback adapter. |
 
@@ -25,8 +25,8 @@ the same action.
 Linux and macOS use native recovery mechanisms. Windows uses the Shell file
 operation with `FOFX_RECYCLEONDELETE`, which fails the operation when a volume
 cannot recycle an item instead of falling back to permanent deletion. Native CI
-then verifies that a disposable fixture is listed as recoverable in the Recycle
-Bin. The common guard refuses links; the Windows adapter additionally refuses
+then verifies that a disposable fixture increases the documented Recycle Bin
+item and byte totals. The common guard refuses links; the Windows adapter additionally refuses
 every reparse point (including junctions and mount points) during scan, privacy
 probing, validation and the identity re-check. Its identity is the native
 volume-serial/file-index pair, opened without following a reparse point.

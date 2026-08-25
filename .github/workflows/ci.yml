@@ -83,8 +83,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       # Compile target-selected adapters and every test/example source on
-      # their native host. The native Trash integration test proves desktop
-      # recovery instead of only checking that a source path disappeared.
+      # their native host. The native Trash integration test queries the
+      # desktop trash store instead of only checking a missing source path.
       - name: Compile all targets
         run: cargo check --workspace --all-targets
 
