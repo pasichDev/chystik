@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chystik — a safety-first disk cleaner</title>
+<meta name="description" content="Chystik classifies what it finds, rates every item by the cost of losing it, and deletes only through the desktop trash. Read the safety model.">
+<link rel="canonical" href="https://pasichdev.github.io/chystik/">
+<link rel="icon" href="assets/icon.png">
+<meta name="theme-color" content="#fbfaf7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#14140f" media="(prefers-color-scheme: dark)">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://pasichdev.github.io/chystik/">
+<meta property="og:title" content="Chystik — a safety-first disk cleaner">
+<meta property="og:description" content="Disk analysers tell you a directory is 8 GB. Chystik tells you it is ~/.cache/go-build, that Go rebuilds it on the next compile, and that deleting it costs you forty seconds.">
+<meta property="og:image" content="https://pasichdev.github.io/chystik/assets/screenshot-gui.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Serif:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#fbfaf7; --ink:#1b1a17; --ink-2:#4a4740; --rule:#e0ddd4; --rule-2:#c9c5b8;
+    --accent:#8a4b2a; --safe:#1f7a5c; --moderate:#9a6a10; --risky:#a63447;
+    --serif:"IBM Plex Serif",Georgia,"Times New Roman",serif;
+    --sans:"IBM Plex Sans",system-ui,-apple-system,Segoe UI,sans-serif;
+    --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{--paper:#14140f;--ink:#eae7dd;--ink-2:#a9a496;--rule:#2c2b24;--rule-2:#403e34;
+          --accent:#d99a6c;--safe:#4fc79b;--moderate:#dfa63a;--risky:#e5738a}
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--serif);font-size:18px;line-height:1.65}
+  a{color:var(--accent)}
+  code,.mono{font-family:var(--mono);font-size:.86em}
+  .page{max-width:760px;margin:0 auto;padding:0 28px}
+
+  /* masthead */
+  .masthead{border-bottom:3px double var(--rule-2);padding:44px 0 22px;text-align:center}
+  .masthead img{width:56px;height:56px}
+  .masthead h1{font-size:42px;margin:14px 0 6px;letter-spacing:.02em;font-weight:600}
+  .masthead .sub{font-family:var(--sans);font-size:15px;color:var(--ink-2);letter-spacing:.02em;margin:0}
+  .masthead .meta{font-family:var(--mono);font-size:12px;color:var(--ink-2);letter-spacing:.1em;text-transform:uppercase;margin-top:18px}
+
+  /* abstract */
+  .abstract{padding:34px 0;border-bottom:1px solid var(--rule)}
+  .abstract p{margin:0;font-size:20px;line-height:1.6}
+  .abstract p+p{margin-top:16px}
+  .abstract .label{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-2);margin:0 0 12px}
+
+  /* toc */
+  .toc{padding:26px 0;border-bottom:1px solid var(--rule);font-family:var(--sans);font-size:15px}
+  .toc ol{margin:0;padding-left:1.4em;columns:2;column-gap:36px}
+  .toc li{margin:3px 0}
+  @media(max-width:620px){.toc ol{columns:1}}
+
+  /* sections */
+  section{padding:40px 0;border-bottom:1px solid var(--rule)}
+  section h2{font-family:var(--sans);font-size:15px;font-weight:600;letter-spacing:.02em;margin:0 0 18px;
+             display:flex;gap:12px;align-items:baseline}
+  section h2 .n{font-family:var(--mono);font-size:12px;color:var(--ink-2);letter-spacing:.08em}
+  section h3{font-family:var(--sans);font-size:16px;font-weight:600;margin:26px 0 6px}
+  section p{margin:0 0 14px}
+  section p:last-child{margin-bottom:0}
+
+  figure{margin:0 0 8px}
+  figure img{width:100%;height:auto;display:block;border:1px solid var(--rule-2);border-radius:4px}
+  figcaption{font-family:var(--sans);font-size:13.5px;color:var(--ink-2);margin-top:10px;text-align:center}
+
+  dl{margin:0}
+  dt{font-family:var(--sans);font-weight:600;font-size:15px;margin-top:18px}
+  dt:first-child{margin-top:0}
+  dd{margin:4px 0 0;color:var(--ink-2);font-size:17px}
+  dt .sev{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;
+          border:1px solid currentColor;border-radius:3px;padding:1px 6px;margin-right:8px}
+  .sev.s{color:var(--safe)} .sev.m{color:var(--moderate)} .sev.r{color:var(--risky)}
+
+  table{width:100%;border-collapse:collapse;font-family:var(--sans);font-size:14.5px}
+  caption{caption-side:top;text-align:left;font-family:var(--mono);font-size:11px;letter-spacing:.12em;
+          text-transform:uppercase;color:var(--ink-2);padding-bottom:8px}
+  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--rule);vertical-align:top}
+  thead th{border-bottom:1.5px solid var(--rule-2);font-size:12.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-2)}
+  tbody tr:last-child td{border-bottom:1.5px solid var(--rule-2)}
+  td:first-child{font-weight:600;white-space:nowrap}
+  .scroll{overflow-x:auto}
+
+  pre{font-family:var(--mono);font-size:13px;line-height:1.7;background:transparent;border-left:2px solid var(--rule-2);
+      padding:2px 0 2px 16px;margin:14px 0;overflow-x:auto;color:var(--ink-2)}
+  pre b{color:var(--ink);font-weight:500}
+
+  blockquote{margin:22px 0 0;padding:16px 20px;border-left:3px solid var(--risky);background:color-mix(in srgb,var(--risky) 7%,transparent)}
+  blockquote p{margin:0;font-size:17px}
+
+  .cats{font-family:var(--sans);font-size:15.5px;color:var(--ink-2);line-height:2}
+
+  footer{padding:32px 0 64px;font-family:var(--sans);font-size:14px;color:var(--ink-2);text-align:center}
+  footer a{margin:0 9px;white-space:nowrap}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="masthead">
+    <img src="assets/icon.png" alt="">
+    <h1>Chystik</h1>
+    <p class="sub">A safety-first disk-cleanup tool that knows what a directory <em>is</em>.</p>
+    <div class="meta">Version 0.1.0 · MIT · Written in Rust</div>
+  </div>
+
+  <div class="abstract">
+    <p class="label">Abstract</p>
+    <p>Disk analysers like QDirStat and Filelight tell you a directory is 8&nbsp;GB. They do not tell
+       you that it is <code>~/.cache/go-build</code>, that Go rebuilds it on the next compile, and
+       that deleting it costs you forty seconds. Chystik does.</p>
+    <p>It classifies what it finds into fifteen categories, rates every item by what losing it
+       actually costs, and — where native-trash safety is verified — moves what you choose to the
+       desktop trash, never straight to <code>unlink</code>.</p>
+  </div>
+
+  <nav class="toc">
+    <ol>
+      <li><a href="#s1">What it does</a></li>
+      <li><a href="#s2">Severity</a></li>
+      <li><a href="#s3">Safety model</a></li>
+      <li><a href="#s4">Categories</a></li>
+      <li><a href="#s5">Command line</a></li>
+      <li><a href="#s6">Platform support</a></li>
+      <li><a href="#s7">Installation</a></li>
+      <li><a href="#s8">Contributing</a></li>
+    </ol>
+  </nav>
+
+  <section id="s1">
+    <h2><span class="n">1</span> What it does</h2>
+    <figure>
+      <img src="assets/screenshot-gui.png" alt="Chystik after scanning a Linux system: category rail on the left, findings with size, risk and last-used on the right.">
+      <figcaption>The category rail answers <em>“what is worth doing?”</em>; the detail pane answers <em>“is this one safe?”</em></figcaption>
+    </figure>
+    <h3>Understands, not just measures</h3>
+    <p>Roughly two hundred rules recognise package caches, build outputs, downloaded toolchains,
+       AI model weights, agent transcripts, container layers and desktop junk — each with a sentence
+       explaining what it is and how it comes back.</p>
+    <h3>Refuses to do damage</h3>
+    <p>Every path passes through a guard before deletion: system directories, <code>.git</code>,
+       <code>.ssh</code>, <code>.gnupg</code> and your settings are rejected outright, symlinks and
+       Windows reparse points are never followed, and the scan root itself is never deletable.</p>
+    <h3>Fail-closed cleanup</h3>
+    <p>Linux, macOS and Windows deletion go through their native desktop recovery mechanisms. On a
+       platform without a verified native-trash adapter, cleanup is disabled rather than falling
+       back to direct deletion.</p>
+    <h3>Fast</h3>
+    <p>A full Linux scan of <code>/</code> on a developer machine takes about a second: a parallel
+       <code>jwalk</code> walk that prunes a subtree as soon as it is classified, and skips pseudo,
+       read-only and network mounts entirely. The interface is available in English and Ukrainian,
+       detected from your locale.</p>
+  </section>
+
+  <section id="s2">
+    <h2><span class="n">2</span> Severity — what does losing it cost?</h2>
+    <dl>
+      <dt><span class="sev s">Safe</span>Regenerates on its own</dt>
+      <dd>A Go build cache, a pip wheel cache, a thumbnail store. You do nothing; the tool that made
+          it makes it again.</dd>
+      <dt><span class="sev m">Moderate</span>Costs a re-download or a rebuild</dt>
+      <dd>A Rust <code>target</code> directory, a <code>node_modules</code> with a lockfile beside it,
+          a Gradle distribution. Recoverable, but you will wait.</dd>
+      <dt><span class="sev r">Risky</span>Cannot be recreated automatically</dt>
+      <dd>Downloaded model weights, agent transcripts. Never included in a bulk selection — these are
+          ticked one at a time, or not at all.</dd>
+    </dl>
+  </section>
+
+  <section id="s3">
+    <h2><span class="n">3</span> Safety model</h2>
+    <p>This is a tool that deletes things, so the safety model is the product.</p>
+    <div class="scroll">
+      <table>
+        <caption>Table 1 — Layers, outermost first</caption>
+        <thead><tr><th>Layer</th><th>What it does</th></tr></thead>
+        <tbody>
+          <tr><td>Rules</td><td>Only match paths a rule explicitly recognises. There is no “delete anything over N GB”.</td></tr>
+          <tr><td>Severity</td><td>Every match carries the cost of losing it; Risky is excluded from bulk selection.</td></tr>
+          <tr><td>Size floor</td><td>Findings under 1 MiB are dropped, so the signal is not buried in noise.</td></tr>
+          <tr><td>Guard</td><td><code>guard::check</code> runs before every deletion and refuses platform-protected roots, protected names, symlinks and anything outside the scan root.</td></tr>
+          <tr><td>Manifest</td><td>Nothing is deleted until you have seen the full list with per-item guard verdicts.</td></tr>
+          <tr><td>Capability</td><td><code>platform</code> enables native-trash cleanup only where its safety contract is verified; every other target is scan-only.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="margin-top:16px">A crate-level test asserts that no rule can ever propose a path the
+       guard refuses — the two cannot silently disagree.</p>
+    <blockquote><p><strong>It is still your disk.</strong> Rules can be wrong about your machine.
+      Read the manifest.</p></blockquote>
+  </section>
+
+  <section id="s4">
+    <h2><span class="n">4</span> Categories</h2>
+    <p class="cats">Build artifacts · Package caches · IDE &amp; toolchains · AI models ·
+      Browser &amp; system · Android dev · AI agents · Containers · Installers · Games · Media ·
+      Messengers · Cloud sync · Office · System junk</p>
+  </section>
+
+  <section id="s5">
+    <h2><span class="n">5</span> Command line</h2>
+    <p><code>chystik</code> is the terminal frontend over the same scan, exclusion, guard and
+       native-Trash policy the desktop app uses. It starts no GUI, daemon, classifier or network
+       service.</p>
+<pre><b>chystik</b> scan --safe --min-size 100MiB
+<b>chystik</b> explain ~/.cache/go-build
+<b>chystik</b> clean ~/work --safe --dry-run
+<b>chystik</b> report ~/work --format jsonl &gt; chystik-report.jsonl</pre>
+    <p>In an interactive terminal, human <code>scan</code> opens an alternate-screen table with live
+       counters and keyboard navigation; <code>--no-tui</code>, <code>--quiet</code> and redirected
+       output fall back to readable line progress. Machine formats never receive TUI escapes.</p>
+    <div class="scroll">
+      <table>
+        <caption>Table 2 — Exit codes</caption>
+        <thead><tr><th>Code</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td>0</td><td>Successful command; an empty scan is successful.</td></tr>
+          <tr><td>1</td><td>Operational failure or partial cleanup.</td></tr>
+          <tr><td>2</td><td>Invalid arguments or unusable configuration.</td></tr>
+          <tr><td>3</td><td>User cancelled confirmation or selection.</td></tr>
+          <tr><td>4</td><td>Policy refused every requested cleanup item.</td></tr>
+          <tr><td>5</td><td><code>Ctrl-C</code>, <code>SIGTERM</code> or <code>SIGHUP</code> interrupted a scan.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="margin-top:16px"><a href="https://github.com/pasichDev/chystik/blob/main/docs/CLI.md">Full CLI reference — JSON/JSONL schemas, confirmation policy, completions, <code>chystik(1)</code> →</a></p>
+  </section>
+
+  <section id="s6">
+    <h2><span class="n">6</span> Platform support</h2>
+    <div class="scroll">
+      <table>
+        <caption>Table 3 — Capability by target</caption>
+        <thead><tr><th>Platform</th><th>Scan</th><th>Cleanup</th><th>Artifact</th></tr></thead>
+        <tbody>
+          <tr><td>Linux x86_64</td><td>Supported</td><td>Native desktop trash</td><td>AppImage, .deb, .rpm, Arch recipe</td></tr>
+          <tr><td>macOS</td><td>Preview</td><td>Native Trash</td><td>No signed/notarized artifact yet</td></tr>
+          <tr><td>Windows 10/11 x64</td><td>Preview</td><td>Native Recycle Bin</td><td>Portable ZIP, unsigned</td></tr>
+          <tr><td>Windows 11 ARM64</td><td>Preview</td><td>Native Recycle Bin</td><td>Portable ARM64 ZIP</td></tr>
+          <tr><td>Other</td><td>Unsupported</td><td>Disabled (scan-only)</td><td>Conservative fallback adapter</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="margin-top:16px">Cleanup is deliberately asymmetric: a platform only advertises
+       native-trash cleanup after it proves both a native recovery mechanism and its
+       symlink/reparse-point contract with real integration tests. There is no direct-delete
+       fallback. <a href="https://github.com/pasichDev/chystik/blob/main/docs/SUPPORT.md">Full matrix →</a></p>
+  </section>
+
+  <section id="s7">
+    <h2><span class="n">7</span> Installation</h2>
+    <h3>Linux release artifacts (x86_64)</h3>
+<pre>chmod +x Chystik-0.1.0-x86_64.AppImage &amp;&amp; ./Chystik-0.1.0-x86_64.AppImage
+sudo apt install ./chystik_0.1.0_amd64.deb
+sudo dnf install ./chystik-0.1.0-1.x86_64.rpm
+cd packaging/arch &amp;&amp; makepkg -si</pre>
+    <h3>Windows portable ZIP</h3>
+<pre>Expand-Archive .\Chystik-0.1.0-windows-x86_64.zip -DestinationPath .\Chystik
+.\Chystik\Chystik-GUI.exe</pre>
+    <h3>From source — Rust 1.80 or newer</h3>
+<pre>git clone https://github.com/pasichDev/chystik
+cd chystik &amp;&amp; cargo build --release
+./packaging/install.sh</pre>
+    <p style="margin-top:14px;font-family:var(--sans);font-size:15px;color:var(--ink-2)">
+      Desktop dependencies: <code>build-essential pkg-config libgtk-3-dev</code> on Debian/Ubuntu,
+      <code>gcc pkgconf-pkg-config gtk3-devel</code> on Fedora,
+      <code>base-devel cargo pkgconf gtk3 libxkbcommon-x11</code> on Arch.</p>
+  </section>
+
+  <section id="s8">
+    <h2><span class="n">8</span> Contributing</h2>
+    <p>Adding a cleanup rule is usually a one-line table entry plus a test; that is the most useful
+       contribution. Security issues go through
+       <a href="https://github.com/pasichDev/chystik/blob/main/SECURITY.md">SECURITY.md</a>, not the
+       public issue tracker.</p>
+  </section>
+
+  <footer>
+    <a href="https://github.com/pasichDev/chystik">GitHub</a>·
+    <a href="https://github.com/pasichDev/chystik/blob/main/docs/CLI.md">CLI</a>·
+    <a href="https://github.com/pasichDev/chystik/blob/main/docs/SUPPORT.md">Support</a>·
+    <a href="https://github.com/pasichDev/chystik/blob/main/CONTRIBUTING.md">Contributing</a>·
+    <a href="https://github.com/pasichDev/chystik/blob/main/LICENSE">MIT</a>
+    <p style="margin-top:14px">Bundles IBM Plex Sans and IBM Plex Mono, © 2017 IBM Corp., under the SIL Open Font License 1.1.</p>
+  </footer>
+
+</div>
+</body>
+</html>

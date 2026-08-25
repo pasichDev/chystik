@@ -15,6 +15,10 @@ All notable changes to this project are documented in this file.
   interactive selection, persisted consent, exclusions, and guard revalidation.
 - Machine output now carries version, platform, and generation-time metadata;
   machine argument/runtime errors have a versioned stderr document.
+- Project website in `site/`, published to GitHub Pages from `main` by
+  `pages.yml`, which refuses to deploy a page whose local assets are missing or
+  whose screenshot has drifted from the one in `README.md`.
+- Application screenshots in `docs/img/`, in English and Ukrainian.
 
 ### Changed
 
