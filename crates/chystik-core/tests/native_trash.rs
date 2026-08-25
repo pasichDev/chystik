@@ -54,7 +54,12 @@ mod native_trash {
             &SystemTrash,
         );
 
-        assert_eq!(outcome.removed, vec![target.clone()]);
+        assert_eq!(
+            outcome.removed,
+            vec![target.clone()],
+            "the native recycle operation was skipped: {:?}",
+            outcome.skipped
+        );
         assert_eq!(outcome.freed_bytes, 41);
         assert!(outcome.skipped.is_empty());
         assert!(
