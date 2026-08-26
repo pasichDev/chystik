@@ -121,6 +121,8 @@
     "evidence_rule": "Rule",
     "evidence_recovery": "Recovery cost",
     "evidence_source": "Source",
+    "evidence_reviewed": "Last reviewed",
+    "evidence_preconditions": "Conditions",
     "section_cleanup": "Cleanup",
     "section_disks": "Disks",
     "section_privacy": "Privacy",

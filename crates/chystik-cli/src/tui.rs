@@ -195,7 +195,7 @@ impl ScanView {
             AppScanEvent::Started { root } => self.root = Some(root),
             AppScanEvent::DirectoriesScanned { count } => self.directories = count,
             AppScanEvent::Finding(finding) => {
-                self.findings.push(finding);
+                self.findings.push(*finding);
             }
             AppScanEvent::Finished(summary) => self.summary = Some(summary),
             AppScanEvent::Cancelled => self.cancelling = true,

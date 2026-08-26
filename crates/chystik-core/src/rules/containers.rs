@@ -2,9 +2,6 @@
 //! caches and local VM disk images. Root-owned daemon state
 //! (`/var/lib/docker`) is intentionally out of scope: it is never
 //! reachable through a `$HOME`-relative scan.
-//!
-//! Owner: child agent `rules-containers-misc` on branch
-//! `v02/rules-containers-misc`.
 
 use std::path::Path;
 

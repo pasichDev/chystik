@@ -101,6 +101,8 @@ fn safe_cleanup_plan_never_selects_excluded_advisory_risky_or_review_findings() 
         source_url: "https://example.test/review".into(),
         policy: FindingPolicy::DirectReview,
         recovery_cost: "manual review required".into(),
+        reviewed_at: "2026-08-26".into(),
+        preconditions: vec!["fixture precondition".into()],
     });
     let scan = ScanResult::from_findings(
         vec![
@@ -182,7 +184,7 @@ fn streaming_application_scan_applies_the_shared_filter_without_collecting_resul
         &Arc::new(AtomicBool::new(false)),
         move |event| {
             if let AppScanEvent::Finding(finding) = event {
-                callback_seen.lock().unwrap().push(finding);
+                callback_seen.lock().unwrap().push(*finding);
             }
         },
     )

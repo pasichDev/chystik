@@ -1,4 +1,4 @@
-//! Severity helpers — TO IMPLEMENT (core-engine agent).
+//! Severity helpers.
 
 use crate::model::Severity;
 use chrono::{DateTime, Utc};

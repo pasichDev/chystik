@@ -232,6 +232,8 @@ pub struct Strings {
     pub evidence_rule: String,
     pub evidence_recovery: String,
     pub evidence_source: String,
+    pub evidence_reviewed: String,
+    pub evidence_preconditions: String,
     // sections, disks and privacy
     pub section_cleanup: String,
     pub section_disks: String,

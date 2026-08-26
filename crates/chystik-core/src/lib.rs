@@ -1,8 +1,8 @@
 //! chystik-core: filesystem scanner, category rules and severity engine.
 //!
-//! Module ownership (v0.2):
-//! - `model` — API contract (orchestrator-owned)
-//! - `rules/*` — one domain module per owner; see `rules` docs
+//! Module map:
+//! - `model` — API contract
+//! - `rules/*` — domain rule sets
 //! - `scanner`, `guard`, `severity`, `report` — core engine
 //! - `disks` — mounted-volume discovery (capacity header, multi-disk scan)
 //! - `advisories` — system space Chystik reports but never deletes

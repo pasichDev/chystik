@@ -1,8 +1,6 @@
 //! Cloud sync clients (Nextcloud, Dropbox, Insync, Syncthing): transfer
 //! queues, conflict copies, metadata DBs. Synced user files are NEVER
 //! targets — only client-internal state.
-//!
-//! Owner: child agent `rules-cloud` on branch `v02/rules-cloud`.
 
 use std::path::Path;
 

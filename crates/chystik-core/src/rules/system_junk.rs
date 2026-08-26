@@ -1,7 +1,5 @@
 //! Generic system junk in `$HOME`: app crash dumps, stale core files,
 //! orphaned X11/Wayland session leftovers, one-off `.cache` strays.
-//!
-//! Owner: child agent `rules-system-junk` on branch `v02/rules-system-junk`.
 
 use std::path::Path;
 

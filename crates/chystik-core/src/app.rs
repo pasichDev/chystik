@@ -97,7 +97,7 @@ pub struct AppScanSummary {
 pub enum AppScanEvent {
     Started { root: PathBuf },
     DirectoriesScanned { count: u64 },
-    Finding(Finding),
+    Finding(Box<Finding>),
     Finished(AppScanSummary),
     Cancelled,
 }
@@ -195,7 +195,7 @@ where
         scanner::ScanStreamEvent::FindingFound(finding) => {
             if filter.matches(&finding) {
                 if let Ok(mut findings) = collected_findings.lock() {
-                    findings.push(finding.clone());
+                    findings.push((*finding).clone());
                 }
                 event_callback(AppScanEvent::Finding(finding));
             }

@@ -1,4 +1,4 @@
-//! Report aggregation and JSON export — TO IMPLEMENT (core-engine agent).
+//! Report aggregation and atomic JSON export.
 
 use crate::model::{Category, Finding};
 use chrono::Utc;

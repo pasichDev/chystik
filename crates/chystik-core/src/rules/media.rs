@@ -1,7 +1,5 @@
 //! Media production apps (OBS, Kdenlive, GIMP, Audacity...): render/proxy
 //! caches, autosave scratch. Project source files are never targets.
-//!
-//! Owner: child agent `rules-media` on branch `v02/rules-media`.
 
 use std::path::Path;
 

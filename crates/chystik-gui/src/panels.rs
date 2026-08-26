@@ -1230,6 +1230,22 @@ fn finding_tooltip(lang: i18n::Lang, finding: &chystik_core::model::Finding) -> 
             "{}: {}",
             strings.evidence_source, provenance.source_url
         ));
+        lines.push(format!(
+            "{}: {}",
+            strings.evidence_reviewed, provenance.reviewed_at
+        ));
+        if !provenance.preconditions.is_empty() {
+            lines.push(format!(
+                "{}:\n{}",
+                strings.evidence_preconditions,
+                provenance
+                    .preconditions
+                    .iter()
+                    .map(|condition| format!("• {condition}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ));
+        }
     }
     if let Some(advice) = &finding.advice {
         lines.push(format!("{}\n{}", strings.advice_run, advice));
@@ -1273,7 +1289,7 @@ mod tests {
 
     use chystik_core::model::{Category, Finding, FindingPolicy, RuleProvenance, Severity};
 
-    use super::is_bulk_safe_finding;
+    use super::{finding_tooltip, is_bulk_safe_finding};
 
     fn finding(policy: Option<FindingPolicy>) -> Finding {
         Finding {
@@ -1290,6 +1306,8 @@ mod tests {
                 source_url: "https://example.test".into(),
                 policy,
                 recovery_cost: "fixture".into(),
+                reviewed_at: "2026-08-26".into(),
+                preconditions: vec!["fixture precondition".into()],
             }),
         }
     }
@@ -1306,5 +1324,15 @@ mod tests {
         assert!(!is_bulk_safe_finding(&finding(Some(
             FindingPolicy::VendorCommandOnly
         ))));
+    }
+
+    #[test]
+    fn tooltip_exposes_catalog_review_and_conditions() {
+        let tooltip = finding_tooltip(
+            crate::i18n::Lang::En,
+            &finding(Some(FindingPolicy::DirectSafe)),
+        );
+        assert!(tooltip.contains("Last reviewed: 2026-08-26"));
+        assert!(tooltip.contains("Conditions:\n• fixture precondition"));
     }
 }

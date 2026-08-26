@@ -1,6 +1,4 @@
-//! Rule registry. `classify` delegates to domain rule sets in order;
-//! each domain module is owned by one child agent and must not edit
-//! sibling files.
+//! Rule registry. `classify` delegates to domain rule sets in order.
 
 pub(crate) mod ai_agents;
 pub(crate) mod android;
@@ -35,6 +33,34 @@ pub(crate) struct Match {
 pub(crate) struct ClassifiedRule {
     pub matched: Match,
     pub catalog: Option<catalog::CatalogMetadata>,
+}
+
+/// Immutable rule state for one scan.
+///
+/// Catalog roots and environment overrides cannot legitimately change while a
+/// scan is in flight. Keeping them here gives the scanner one deep interface
+/// and keeps per-directory classification to path checks only.
+#[derive(Clone)]
+pub(crate) struct RuleEngine {
+    catalog: catalog::Catalog,
+}
+
+impl RuleEngine {
+    pub(crate) fn current() -> Self {
+        Self {
+            catalog: catalog::Catalog::current(),
+        }
+    }
+
+    pub(crate) fn classify_with_metadata(&self, dir: &Path) -> Option<ClassifiedRule> {
+        if let Some((matched, catalog)) = self.catalog.classify_with_metadata(dir) {
+            return Some(ClassifiedRule {
+                matched,
+                catalog: Some(catalog),
+            });
+        }
+        classify_legacy(dir)
+    }
 }
 
 /// A rule that judges a whole directory's CHILDREN together rather than one
@@ -204,7 +230,7 @@ pub(crate) fn parent_has_py(parent: &Path) -> bool {
         .any(|e| e.path().extension().is_some_and(|ext| ext == "py"))
 }
 
-/// Evaluate all registered rule sets against `dir` (first match wins).
+/// Evaluate legacy rule sets against `dir` (first match wins).
 /// Order matters: an earlier module wins outright.
 ///
 /// `containers` used to run before the app-domain modules, and its Flatpak
@@ -212,13 +238,7 @@ pub(crate) fn parent_has_py(parent: &Path) -> bool {
 /// application's cache — a Flatpak Steam or Telegram cache could never be
 /// routed to `games` or `comms`. It now runs after them, so a domain
 /// module can own its own app id and the wildcard only catches the rest.
-pub(crate) fn classify_with_metadata(dir: &Path) -> Option<ClassifiedRule> {
-    if let Some((matched, catalog)) = catalog::classify_with_metadata(dir) {
-        return Some(ClassifiedRule {
-            matched,
-            catalog: Some(catalog),
-        });
-    }
+fn classify_legacy(dir: &Path) -> Option<ClassifiedRule> {
     let matched = core::classify(dir)
         .or_else(|| android::classify(dir))
         .or_else(|| ai_agents::classify(dir))
@@ -241,7 +261,9 @@ pub(crate) fn classify_with_metadata(dir: &Path) -> Option<ClassifiedRule> {
 /// Evaluate all registered rule sets and return the original lightweight
 /// match for callers that do not need catalog provenance.
 pub(crate) fn classify(dir: &Path) -> Option<Match> {
-    classify_with_metadata(dir).map(|classified| classified.matched)
+    RuleEngine::current()
+        .classify_with_metadata(dir)
+        .map(|classified| classified.matched)
 }
 
 #[cfg(test)]
@@ -292,5 +314,32 @@ mod tests {
 
         let m = classify(&proj.join("node_modules")).expect("registry match");
         assert_eq!(m.category, Category::BuildArtifacts);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn catalog_evidence_preempts_the_legacy_pip_rule() {
+        let _env = TEST_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let home = tempdir().unwrap();
+        let cache = home.path().join(".cache/pip");
+        std::fs::create_dir_all(&cache).unwrap();
+        std::env::set_var("CHYSTIK_TEST_HOME", home.path());
+        std::env::set_var("XDG_CACHE_HOME", home.path().join(".cache"));
+
+        assert!(classify_legacy(&cache).is_some(), "fixture must overlap");
+        let classified = RuleEngine::current()
+            .classify_with_metadata(&cache)
+            .expect("catalog match");
+
+        std::env::remove_var("XDG_CACHE_HOME");
+        std::env::remove_var("CHYSTIK_TEST_HOME");
+        assert_eq!(
+            classified
+                .catalog
+                .expect("catalog provenance")
+                .provenance
+                .rule_id,
+            "python.pip.cache"
+        );
     }
 }
