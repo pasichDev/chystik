@@ -206,7 +206,19 @@ jobs:
               cargo build --release --locked --package chystik-gui --package chystik-cli
               ${{ matrix.runtime_check }}
               if [[ "${{ matrix.name }}" == "Arch" ]]; then
-                bash packaging/linux/tests/arch-aur.sh
+                # makepkg deliberately refuses root. Keep the source recipe
+                # check hermetic and avoid changing ownership of the bind-mounted
+                # workspace used by the preceding runtime compilation.
+                install -d -m 0755 /tmp/chystik-aur/packaging/arch
+                install -d -m 0755 /tmp/chystik-aur/packaging/linux/tests
+                install -m 0644 Cargo.toml /tmp/chystik-aur/Cargo.toml
+                install -m 0644 packaging/arch/PKGBUILD /tmp/chystik-aur/packaging/arch/PKGBUILD
+                install -m 0644 packaging/arch/.SRCINFO /tmp/chystik-aur/packaging/arch/.SRCINFO
+                install -m 0644 packaging/linux/common.sh /tmp/chystik-aur/packaging/linux/common.sh
+                install -m 0755 packaging/linux/tests/arch-aur.sh /tmp/chystik-aur/packaging/linux/tests/arch-aur.sh
+                useradd --system --create-home --shell /usr/bin/nologin chystik-ci
+                chown -R chystik-ci:chystik-ci /tmp/chystik-aur
+                runuser -u chystik-ci -- bash /tmp/chystik-aur/packaging/linux/tests/arch-aur.sh
               fi'
 
   icon:
