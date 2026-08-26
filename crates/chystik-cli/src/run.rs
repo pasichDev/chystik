@@ -97,7 +97,7 @@ fn run_clean(args: CleanArgs, cancel: &Arc<AtomicBool>) -> Result<ExitCode, CliE
     debug_assert!(args.safe, "clap requires --safe for every clean invocation");
     if matches!(args.selection.severity, Some(value) if value != SeverityArg::Safe) {
         return Err(CliError::invalid(
-            "clean --safe accepts no --severity or only --severity safe",
+            "clean --safe accepts no --severity or only --severity safe; cleanup eligibility still requires the auto-cleanable policy",
         ));
     }
     if args.format == OutputFormat::Jsonl {
@@ -209,13 +209,13 @@ fn write_cleanup_preview(
 
 fn write_human_cleanup_manifest(plan: &app::SafeCleanupPlan) {
     println!(
-        "Safe cleanup manifest: {} item(s), {} bytes eligible",
+        "Auto-cleanable cleanup manifest: {} item(s), {} bytes eligible",
         plan.eligible.len(),
         plan.eligible_bytes()
     );
     for item in &plan.eligible {
         println!(
-            "  SAFE {:>12}  {}",
+            "  AUTO {:>12}  {}",
             item.finding.size_bytes,
             item.finding.path.display()
         );
@@ -257,7 +257,7 @@ fn confirm_cleanup(
     if !needs_consent {
         println!("Chystik moves selected paths only to native Trash; no direct deletion exists.");
     }
-    print!("Move {selected_count} selected safe item(s) to native Trash? Type yes to continue: ");
+    print!("Move {selected_count} selected auto-cleanable item(s) to native Trash? Type yes to continue: ");
     io::stdout()
         .flush()
         .map_err(|error| CliError::operational(format!("flush confirmation: {error}")))?;
@@ -375,11 +375,15 @@ fn run_explain(path: &std::path::Path) -> Result<ExitCode, CliError> {
             path,
             category,
             severity,
+            cleanup_policy,
             note,
         } => {
             println!("{}", path.display());
             println!("category: {}", category.as_str());
+            println!("Recovery: {}", severity.recovery_class().display_label());
+            println!("Cleanup: {}", cleanup_policy.display_label());
             println!("severity: {}", severity.as_str());
+            println!("cleanup_policy: {}", cleanup_policy.as_str());
             println!("note: {note}");
         }
         Explanation::Unrecognized { path } => {
@@ -393,7 +397,7 @@ fn run_explain(path: &std::path::Path) -> Result<ExitCode, CliError> {
 fn run_scan(args: ScanArgs, cancel: &Arc<AtomicBool>) -> Result<ExitCode, CliError> {
     let mut request = request_from_selection(&args.selection)?;
     if args.safe {
-        request.filter.severity = Some(Severity::Safe);
+        request.filter.auto_cleanable_only = true;
     }
     if args.format == OutputFormat::Jsonl {
         write_jsonl_scan(&request, cancel)?;
@@ -581,6 +585,7 @@ fn request_from_selection_with_exclusions(
         filter: FindingFilter {
             category: args.category.as_deref().map(parse_category).transpose()?,
             severity: args.severity.map(severity),
+            auto_cleanable_only: false,
         },
         sort: sort(args.sort),
         min_finding_bytes: args

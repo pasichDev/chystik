@@ -266,7 +266,7 @@ impl ChystikApp {
         let lowered = self.search.trim().to_lowercase();
         let needle = (!lowered.is_empty()).then_some(lowered);
         let mut rows: Vec<usize> = Vec::with_capacity(self.findings.len());
-        let mut buckets = CleanBuckets::default();
+        let mut cleanup_totals = CleanupTotals::default();
         let mut stats: HashMap<Category, CatStat> = HashMap::new();
         let (mut all_bytes, mut all_count) = (0u64, 0usize);
         for (i, f) in self.findings.iter().enumerate() {
@@ -296,7 +296,7 @@ impl ChystikApp {
             ) {
                 continue;
             }
-            buckets.add(f);
+            cleanup_totals.add(f);
             rows.push(i);
         }
         let mut cat_stats: Vec<CatStat> = stats.into_values().collect();
@@ -318,7 +318,7 @@ impl ChystikApp {
         });
         self.view = ViewCache {
             rows,
-            buckets,
+            cleanup_totals,
             cat_stats,
             all_bytes,
             all_count,

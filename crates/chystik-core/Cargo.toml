@@ -14,6 +14,7 @@ jwalk = { workspace = true }
 chrono = { workspace = true }
 libc = { workspace = true }
 trash = { workspace = true }
+toml = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_WindowsProgramming"] }
@@ -21,3 +22,9 @@ windows = { version = "0.56", features = ["Win32_Foundation", "Win32_System_Com"
 
 [dev-dependencies]
 tempfile = { workspace = true }
+proptest = { workspace = true }
+
+[build-dependencies]
+chrono = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }

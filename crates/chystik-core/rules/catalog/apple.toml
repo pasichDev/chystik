@@ -1,0 +1,76 @@
+[[rule]]
+id = "ios.cocoapods.cache"
+category = "package-caches"
+recovery = "automatic"
+recovery_note = "pods are downloaded again on the next install"
+cleanup_policy = "auto-cleanable"
+note = "CocoaPods download cache — restored by the next pod install"
+source_url = "https://guides.cocoapods.org/using/faq.html"
+reviewed_at = "2026-08-26"
+preconditions = [
+  "the path is the exact documented cache root",
+  "the path remains inside a Chystik-owned user root",
+]
+
+[[rule.locator]]
+platform = "macos"
+root = "library-caches"
+path = "CocoaPods"
+
+[[rule]]
+id = "xcode.derived-data"
+category = "ide-toolchains"
+recovery = "rebuild-redownload"
+recovery_note = "the selected Xcode projects rebuild indexes and products"
+cleanup_policy = "review-required"
+note = "Xcode DerivedData — close Xcode; the selected project's build data is rebuilt"
+source_url = "https://developer.apple.com/documentation/Xcode-Release-Notes/xcode-26-release-notes"
+reviewed_at = "2026-08-26"
+preconditions = [
+  "the path is the exact Xcode developer-data child",
+  "Xcode should be closed before manual cleanup",
+]
+
+[[rule.locator]]
+platform = "macos"
+root = "developer"
+path = "Xcode/DerivedData"
+
+[[rule]]
+id = "xcode.ios-device-support"
+category = "ide-toolchains"
+recovery = "rebuild-redownload"
+recovery_note = "connect a device again to download its support files"
+cleanup_policy = "review-required"
+note = "Xcode iOS DeviceSupport — device symbols download again when needed"
+source_url = "https://developer.apple.com/forums/thread/683496"
+reviewed_at = "2026-08-26"
+preconditions = [
+  "the path is the exact Xcode developer-data child",
+  "Xcode should be closed before manual cleanup",
+]
+
+[[rule.locator]]
+platform = "macos"
+root = "developer"
+path = "Xcode/iOS DeviceSupport"
+
+[[rule]]
+id = "xcode.unavailable-simulators"
+category = "ide-toolchains"
+recovery = "rebuild-redownload"
+recovery_note = "unavailable simulator devices are removed; available runtimes stay intact"
+cleanup_policy = "tool-managed"
+note = "Unavailable iOS simulators — let simctl remove only devices without a runtime"
+source_url = "https://developer.apple.com/forums/thread/835883"
+reviewed_at = "2026-08-26"
+preconditions = [
+  "Chystik must not move this path to Trash",
+  "use the owning operating-system or vendor command instead",
+]
+advice = "xcrun simctl delete unavailable"
+
+[[rule.locator]]
+platform = "macos"
+root = "developer"
+path = "CoreSimulator/Devices"

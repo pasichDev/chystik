@@ -16,6 +16,36 @@ pub enum Severity {
     Risky,
 }
 
+/// User-facing recovery class derived from the stable severity contract.
+///
+/// `Severity` keeps its existing serialized identifiers (`safe`, `moderate`,
+/// `risky`) for compatibility. New presentation code should use this type so
+/// a recovery cost cannot be confused with Chystik's cleanup authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RecoveryClass {
+    Automatic,
+    RebuildOrRedownload,
+    ManualOrIrreplaceable,
+}
+
+impl RecoveryClass {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Automatic => "automatic",
+            Self::RebuildOrRedownload => "rebuild_or_redownload",
+            Self::ManualOrIrreplaceable => "manual_or_irreplaceable",
+        }
+    }
+
+    pub const fn display_label(self) -> &'static str {
+        match self {
+            Self::Automatic => "Automatic",
+            Self::RebuildOrRedownload => "Rebuild / redownload",
+            Self::ManualOrIrreplaceable => "Manual / irreplaceable",
+        }
+    }
+}
+
 impl Severity {
     /// Stable lowercase identifier used in machine-readable output and CLI
     /// arguments. Unlike [`Self::label`], this is part of the public contract.
@@ -32,6 +62,16 @@ impl Severity {
             Severity::Safe => "Safe",
             Severity::Moderate => "Moderate",
             Severity::Risky => "Risky",
+        }
+    }
+
+    /// The user-facing recovery axis. This deliberately does not answer
+    /// whether Chystik may clean a finding; see [`FindingPolicy`].
+    pub const fn recovery_class(self) -> RecoveryClass {
+        match self {
+            Self::Safe => RecoveryClass::Automatic,
+            Self::Moderate => RecoveryClass::RebuildOrRedownload,
+            Self::Risky => RecoveryClass::ManualOrIrreplaceable,
         }
     }
 
@@ -192,6 +232,25 @@ impl FindingPolicy {
     pub const fn is_actionable(self) -> bool {
         matches!(self, Self::DirectSafe | Self::DirectReview)
     }
+
+    /// Whether this policy permits inclusion in an automatic bulk cleanup.
+    /// The finding still has to have automatic recovery semantics before the
+    /// shared planner accepts it.
+    pub const fn is_auto_cleanable(self) -> bool {
+        matches!(self, Self::DirectSafe)
+    }
+
+    /// Human-facing cleanup permission. Keep [`Self::as_str`] for machine
+    /// contracts; this label intentionally avoids the overloaded word
+    /// "safe".
+    pub const fn display_label(self) -> &'static str {
+        match self {
+            Self::DirectSafe => "Auto-cleanable",
+            Self::DirectReview => "Review required",
+            Self::VendorCommandOnly => "Tool-managed",
+            Self::AdvisoryOnly | Self::NeverClean => "Advisory only",
+        }
+    }
 }
 
 /// Evidence attached to a catalog-backed finding.
@@ -270,6 +329,19 @@ impl Finding {
     /// path.
     pub fn is_actionable(&self) -> bool {
         self.policy().is_actionable()
+    }
+
+    /// The recovery axis, kept separate from cleanup permission.
+    pub const fn recovery_class(&self) -> RecoveryClass {
+        self.severity.recovery_class()
+    }
+
+    /// The only finding shape that may enter a bulk cleanup. The policy is
+    /// authoritative, while the automatic recovery check is a second
+    /// fail-closed boundary that prevents an invalid future rule from making
+    /// manual or valuable data bulk-selectable.
+    pub fn is_auto_cleanable(&self) -> bool {
+        self.policy().is_auto_cleanable() && self.recovery_class() == RecoveryClass::Automatic
     }
 }
 
@@ -362,5 +434,38 @@ mod tests {
 
         assert_eq!(vendor.policy(), FindingPolicy::VendorCommandOnly);
         assert!(!vendor.is_actionable());
+    }
+
+    #[test]
+    fn recovery_and_cleanup_policy_are_independent_axes() {
+        let automatic_review = finding(
+            Severity::Safe,
+            None,
+            Some(RuleProvenance {
+                rule_id: "fixture.review".into(),
+                source_url: "https://example.test/rule".into(),
+                policy: FindingPolicy::DirectReview,
+                recovery_cost: "fixture".into(),
+                reviewed_at: "2026-08-26".into(),
+                preconditions: vec!["fixture".into()],
+            }),
+        );
+        let manual_direct = finding(
+            Severity::Risky,
+            None,
+            Some(RuleProvenance {
+                rule_id: "fixture.invalid".into(),
+                source_url: "https://example.test/rule".into(),
+                policy: FindingPolicy::DirectSafe,
+                recovery_cost: "fixture".into(),
+                reviewed_at: "2026-08-26".into(),
+                preconditions: vec!["fixture".into()],
+            }),
+        );
+
+        assert_eq!(automatic_review.recovery_class(), RecoveryClass::Automatic);
+        assert!(!automatic_review.is_auto_cleanable());
+        assert!(manual_direct.policy().is_auto_cleanable());
+        assert!(!manual_direct.is_auto_cleanable());
     }
 }

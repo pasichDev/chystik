@@ -38,7 +38,7 @@ archive.
 
 The workspace version in `Cargo.toml`, `packaging/arch/PKGBUILD`'s `pkgver`,
 the matching `CHANGELOG.md` section, and a release tag must be identical:
-`0.1.0` becomes `v0.1.0` and `## [0.1.0] - YYYY-MM-DD`. The release workflow
+`X.Y.Z` becomes `vX.Y.Z` and `## [X.Y.Z] - YYYY-MM-DD`. The release workflow
 refuses a mismatch, a missing changelog section, a tag outside `main`, or an
 existing GitHub Release. Stable `MAJOR.MINOR.PATCH` tags are the only release
 inputs; a tag creates the Release from that changelog section only after the
@@ -53,62 +53,77 @@ annotated tag and push only that tag:
 ```bash
 git switch main
 git pull --ff-only origin main
-git tag -a v0.1.0 -m "Chystik 0.1.0"
-git push origin v0.1.0
+git tag -a vX.Y.Z -m "Chystik X.Y.Z"
+git push origin vX.Y.Z
 ```
 
 The tag starts the release workflow. Do not move or reuse a release tag. If a
 published artifact is wrong, make a patch release with a new version and a new
 changelog section instead.
 
-## Adding a cleanup rule
+## Contributing a cleanup rule
 
-This is the most useful contribution and usually the smallest.
+Most evidence-backed cross-platform rules need no Rust change:
 
-Rules live in `crates/chystik-core/src/rules/`, one module per domain. Most are
-a single entry in that module's `HOME_RULES` table:
+1. Add or edit one TOML file in `crates/chystik-core/rules/catalog/`.
+2. Add an authoritative upstream HTTPS source and exact path evidence.
+3. Add or update a positive and sibling-negative fixture when the locator is
+   new or unusual.
+4. Run `cargo test -p chystik-core catalog`.
+5. Open a PR using the safety checklist.
 
-```rust
-HomeRule {
-    rel: ".cache/your-tool",
-    category: Category::PackageCaches,
-    severity: SAFE,
-    note: "Your Tool cache — refetched on the next run",
-},
+Minimal copy-pasteable rule:
+
+```toml
+[[rule]]
+id = "example.tool-cache"
+category = "package-caches"
+recovery = "automatic"
+recovery_note = "the next install downloads the cache again"
+cleanup_policy = "auto-cleanable"
+note = "Example Tool download cache — fetched again on the next install"
+source_url = "https://vendor.example/docs/cache"
+reviewed_at = "2026-08-26"
+preconditions = ["the path is the exact documented cache root"]
+
+[[rule.locator]]
+platform = "linux"
+root = "cache"
+path = "example-tool"
 ```
 
-Four things a reviewer will check:
+The contributor-facing terms are deliberately two axes:
 
-1. **The path is specific.** `.cache/your-tool`, never `.cache`. A rule that
-   can match a directory the user cares about is a bug, not a feature.
-2. **The severity is honest.** *Safe* means the tool rebuilds it with no user
-   action. If a build fails until something is re-downloaded, that is
-   *Moderate*. If it cannot come back automatically, *Risky*.
-3. **The note says what it is and how it returns.** The note is the whole
-   product — it is what a user reads before deciding. "cache" is not a note.
-4. **There is a test.** Add one to the module's `mod tests`. A rule with no
-   test is a rule nobody can safely change later.
+- **Recovery:** `automatic`, `rebuild-redownload`, or
+  `manual-irreplaceable` — what losing the data costs.
+- **Cleanup policy:** `auto-cleanable`, `review-required`, `tool-managed`, or
+  `advisory-only` — what Chystik is allowed to do.
 
-Rules that need a project marker (a lockfile, a manifest) go in `core.rs`
-instead — see `marker_rule` there, and note the `VENDOR_TREES` exclusion:
-`node_modules` shipped inside an application is *not* restorable by
-`npm install`.
+Only `automatic` + `auto-cleanable` is eligible for `clean --safe` (also
+`--auto-cleanable`). The build validator rejects any other combination before
+a binary can be built. The guard still revalidates every selected path and can
+refuse a catalog rule.
 
-Cross-platform developer and driver rules live in `rules/catalog.rs`. They
-must have a stable unique `rule_id`, exact platform locator, `FindingPolicy`,
-concrete recovery cost, primary vendor/upstream HTTPS `source_url`, review
-date, explicit preconditions, and a positive plus sibling-negative fixture.
-`DirectSafe` is the only policy allowed into `clean --safe`; use
-`DirectReview` for an explicit manual decision and `AdvisoryOnly` or
-`VendorCommandOnly` when the owning tool must clean it. Never add a broad
-application, profile, driver-store, project, virtual-environment, or system
-directory as a cleanup candidate. Treat third-party cleaner databases as
-research leads only: write original locators and explanations from primary
-vendor/upstream documentation; do not copy their rule text or metadata.
+Each locator is an explicit platform-owned root plus a relative exact path.
+The schema rejects duplicate IDs/locators, unknown values, non-HTTPS sources,
+missing or invalid review dates, empty notes/preconditions, absolute paths,
+`..`, broad root-only candidates, unreviewed environment variables and marker
+rules without exact marker evidence. Binaries embed reviewed TOML at build time;
+there is no rule download, local plugin or remote auto-update path.
+
+We reject entire application-data directories, user profiles, broad cache
+parents, project roots, virtualenv roots without precise semantics, `.git`,
+credentials, unknown generated data, and rules justified only by another
+cleaner's database. Third-party cleaner databases are research leads only:
+write the locator and explanation from primary vendor/upstream documentation.
+
+Specialized procedural rules with semantics the schema cannot express safely
+(for example project markers) remain Rust in `crates/chystik-core/src/rules/`.
+Do not migrate one by weakening its marker or sibling-negative checks.
 
 ### Order matters
 
-`rules::classify` tries modules in a fixed order and the first match wins. If
+`RuleEngine::classify_with_metadata` tries modules in a fixed order and the first match wins. If
 your rule never fires, check whether an earlier module already claims the path;
 the ordering rationale is documented in `rules/mod.rs`.
 

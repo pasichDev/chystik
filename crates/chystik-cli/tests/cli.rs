@@ -154,6 +154,49 @@ fn scan_safe_is_read_only_and_never_starts_a_gui_or_optional_classifier() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn legacy_safe_and_auto_cleanable_alias_select_the_same_catalog_finding() {
+    let fixture = tempfile::tempdir().unwrap();
+    let home = fixture.path().join("home");
+    let cache = home.join("cache/pip");
+    std::fs::create_dir_all(&cache).unwrap();
+    std::fs::write(cache.join("fixture.whl"), "x".repeat(2048)).unwrap();
+
+    let scan = |flag: &str| {
+        let mut command = chystik();
+        command.args([
+            "scan",
+            home.to_str().unwrap(),
+            flag,
+            "--format",
+            "json",
+            "--min-size",
+            "0",
+        ]);
+        isolated(&mut command, &home);
+        command.env("XDG_CACHE_HOME", home.join("cache"));
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{flag} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let document: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        document["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|finding| finding["provenance"]["rule_id"].clone())
+            .collect::<Vec<_>>()
+    };
+
+    let legacy = scan("--safe");
+    let alias = scan("--auto-cleanable");
+    assert_eq!(legacy, alias);
+    assert_eq!(legacy, vec![serde_json::json!("python.pip.cache")]);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn catalog_finding_exposes_policy_and_evidence_in_json_and_verbose_output() {
     let fixture = tempfile::tempdir().unwrap();
     let home = fixture.path().join("home");
@@ -403,7 +446,7 @@ fn config_show_is_a_versioned_machine_document() {
 }
 
 #[test]
-fn explain_prints_the_registered_category_and_severity_for_a_known_directory() {
+fn explain_prints_recovery_and_cleanup_policy_for_a_known_directory() {
     let fixture = tempfile::tempdir().unwrap();
     let project = fixture.path().join("project");
     let modules = project.join("node_modules");
@@ -423,7 +466,10 @@ fn explain_prints_the_registered_category_and_severity_for_a_known_directory() {
     );
     let text = String::from_utf8(output.stdout).unwrap();
     assert!(text.contains("build_artifacts"));
+    assert!(text.contains("Recovery: Rebuild / redownload"));
+    assert!(text.contains("Cleanup: Review required"));
     assert!(text.contains("moderate"));
+    assert!(text.contains("cleanup_policy: direct_review"));
 }
 
 #[test]

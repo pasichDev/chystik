@@ -1,0 +1,29 @@
+[package]
+name = "chystik-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+chystik-core = { path = "../crates/chystik-core" }
+
+[[bin]]
+name = "guard_paths"
+path = "fuzz_targets/guard_paths.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "canonicalization"
+path = "fuzz_targets/canonicalization.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = []

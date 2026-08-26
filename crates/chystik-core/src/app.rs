@@ -26,6 +26,10 @@ pub const MACHINE_SCHEMA_VERSION: u32 = 1;
 pub struct FindingFilter {
     pub category: Option<Category>,
     pub severity: Option<Severity>,
+    /// Restrict a presentation result to findings eligible for Chystik's
+    /// automatic cleanup policy. This is intentionally distinct from the
+    /// stable severity/recovery filter above.
+    pub auto_cleanable_only: bool,
 }
 
 impl FindingFilter {
@@ -35,6 +39,7 @@ impl FindingFilter {
             && self
                 .severity
                 .is_none_or(|severity| finding.severity == severity)
+            && (!self.auto_cleanable_only || finding.is_auto_cleanable())
     }
 }
 
@@ -122,6 +127,9 @@ pub enum Explanation {
         path: PathBuf,
         category: Category,
         severity: Severity,
+        /// Added without changing the stable `severity` field. This is the
+        /// cleanup-authority axis shown by `chystik explain`.
+        cleanup_policy: FindingPolicy,
         note: String,
     },
     Unrecognized {
@@ -151,12 +159,23 @@ pub fn explain(path: &Path) -> Result<Explanation, ChystikError> {
             path.display()
         )));
     }
-    Ok(match crate::rules::classify(&absolute) {
+    Ok(match crate::rules::classify_with_metadata(&absolute) {
         Some(rule) => Explanation::Recognized {
             path: absolute,
-            category: rule.category,
-            severity: rule.severity,
-            note: rule.note,
+            category: rule.matched.category,
+            severity: rule.matched.severity,
+            cleanup_policy: rule
+                .catalog
+                .as_ref()
+                .map(|catalog| catalog.provenance.policy)
+                .unwrap_or_else(|| {
+                    if rule.matched.severity == Severity::Safe {
+                        FindingPolicy::DirectSafe
+                    } else {
+                        FindingPolicy::DirectReview
+                    }
+                }),
+            note: rule.matched.note,
         },
         None => Explanation::Unrecognized { path: absolute },
     })
@@ -429,18 +448,17 @@ pub fn execute_safe_cleanup_plan(plan: &SafeCleanupPlan, remover: &dyn Remover) 
     crate::cleaner::clean(&plan.cleanup_items(), remover)
 }
 
-/// Build the only bulk-cleanable set: actionable `Safe` findings that remain
-/// inside one requested root, outside configured exclusions, and accepted by
-/// the guard at preview time. No frontend gets a weaker selection primitive.
+/// Build the only bulk-cleanable set: findings with the explicit
+/// `DirectSafe` policy and automatic recovery that remain inside one requested
+/// root, outside configured exclusions, and accepted by the guard at preview
+/// time. No frontend gets a weaker selection primitive.
 pub fn build_safe_cleanup_plan(scan: &ScanResult, exclusions: &[PathBuf]) -> SafeCleanupPlan {
     let exclusions = normalize_exclusions(exclusions.to_vec());
     let mut plan = SafeCleanupPlan::default();
     for finding in &scan.findings {
         let reason = if !finding.is_actionable() {
             Some(PlanSkipReason::Advisory)
-        } else if finding.severity != Severity::Safe
-            || finding.policy() != FindingPolicy::DirectSafe
-        {
+        } else if !finding.is_auto_cleanable() {
             Some(PlanSkipReason::NotSafe)
         } else if exclusions.iter().any(|root| finding.path.starts_with(root)) {
             Some(PlanSkipReason::Excluded)

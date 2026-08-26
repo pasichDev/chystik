@@ -1,27 +1,28 @@
-//! Evidence-backed cross-platform cleanup catalog.
+//! Evidence-backed, declarative cross-platform cleanup catalog.
 //!
-//! This is deliberately separate from the established `$HOME` tables. The
-//! catalog's small interface accepts one candidate path and returns its match
-//! plus provenance; resolving XDG, Library, redirected Windows profile and
-//! environment roots stays here rather than leaking into scanner/frontends.
+//! Contributors edit TOML under `rules/catalog/`. `build.rs` validates every
+//! file and embeds the reviewed sources into the released binary; this module
+//! then resolves only exact platform-owned targets once per scan. The guard is
+//! still the final cleanup authority.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use crate::model::{Category, FindingPolicy, RuleProvenance, Severity};
 use crate::platform::{Platform, PlatformKind, RuleRoots};
 
+use super::catalog_schema::{self, RawLocator, RawRule};
 use super::Match;
+
+mod generated {
+    include!(concat!(env!("OUT_DIR"), "/catalog_sources.rs"));
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct CatalogMetadata {
     pub provenance: RuleProvenance,
     pub advice: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-struct CatalogHit {
-    rule: &'static RuleSpec,
 }
 
 #[derive(Clone)]
@@ -35,7 +36,7 @@ struct RuleContext {
 impl RuleContext {
     fn current() -> Self {
         let platform = crate::platform::current();
-        let environment = ENVIRONMENT_OVERRIDES
+        let environment = catalog_schema::ENVIRONMENT_OVERRIDES
             .iter()
             .filter_map(|name| {
                 std::env::var_os(name)
@@ -58,454 +59,280 @@ impl RuleContext {
     }
 
     fn is_owned_user_path(&self, path: &Path) -> bool {
-        let roots = [
+        [
             Some(&self.roots.home_dir),
             Some(&self.roots.cache_dir),
             self.roots.local_app_data_dir.as_ref(),
             self.roots.library_caches_dir.as_ref(),
-        ];
-        roots
-            .into_iter()
-            .flatten()
-            .any(|root| is_under(path, root, self.kind))
+        ]
+        .into_iter()
+        .flatten()
+        .any(|root| is_under(path, root, self.kind))
     }
 }
 
-/// Resolved catalog state for one scan. Platform roots, allowed environment
-/// overrides, and exact targets are immutable while a scan runs, so callers
-/// construct this once instead of repeating path work for every directory.
+/// Resolved catalog state for one scan. Platform roots, accepted environment
+/// overrides, and exact targets remain immutable during the scan.
 #[derive(Clone)]
 pub(crate) struct Catalog {
     context: RuleContext,
-    fixed_targets: Vec<(PathBuf, &'static RuleSpec)>,
+    fixed_targets: Vec<FixedTarget>,
+    marker_targets: Vec<MarkerTarget>,
+}
+
+#[derive(Clone)]
+struct FixedTarget {
+    path: PathBuf,
+    rule: RuleSpec,
+}
+
+#[derive(Clone)]
+struct MarkerTarget {
+    root: PathBuf,
+    matcher: MarkerMatcher,
+    required_files: Vec<String>,
+    required_dirs: Vec<String>,
+    rule: RuleSpec,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MarkerMatcher {
+    Descendant,
+    DirectChild,
 }
 
 impl Catalog {
     pub(crate) fn current() -> Self {
-        let context = RuleContext::current();
-        let fixed_targets = fixed_targets(&context);
-        Self {
-            context,
-            fixed_targets,
-        }
+        Self::from_context(RuleContext::current())
     }
 
     pub(crate) fn classify_with_metadata(&self, dir: &Path) -> Option<(Match, CatalogMetadata)> {
-        let hit = details_with_targets(dir, &self.context, &self.fixed_targets)?;
-        Some((hit.rule.to_match(), hit.rule.metadata()))
+        if self.context.platform.is_link_or_reparse_point(dir) {
+            return None;
+        }
+        let rule = self
+            .fixed_targets
+            .iter()
+            .find(|target| path_eq(dir, &target.path, self.context.kind))
+            .map(|target| &target.rule)
+            .or_else(|| {
+                self.marker_targets
+                    .iter()
+                    .find(|target| target.matches(dir, self.context.kind))
+                    .map(|target| &target.rule)
+            })?;
+        Some((rule.to_match(), rule.metadata()))
     }
 
-    #[cfg(test)]
     fn from_context(context: RuleContext) -> Self {
-        let fixed_targets = fixed_targets(&context);
+        let mut fixed_targets = Vec::new();
+        let mut marker_targets = Vec::new();
+        for raw in catalog_rules() {
+            let rule = RuleSpec::from_raw(raw);
+            for locator in &raw.locator {
+                if !platform_matches(&locator.platform, context.kind) {
+                    continue;
+                }
+                let Some(root) = resolve_root(locator, &context) else {
+                    continue;
+                };
+                let target = join_relative(&root, locator.path.as_deref());
+                match locator.matcher.as_str() {
+                    "exact" => fixed_targets.push(FixedTarget {
+                        path: target,
+                        rule: rule.clone(),
+                    }),
+                    "descendant-with-markers" => marker_targets.push(MarkerTarget {
+                        root: target,
+                        matcher: MarkerMatcher::Descendant,
+                        required_files: locator.required_files.clone(),
+                        required_dirs: locator.required_dirs.clone(),
+                        rule: rule.clone(),
+                    }),
+                    "direct-child-with-markers" => marker_targets.push(MarkerTarget {
+                        root: target,
+                        matcher: MarkerMatcher::DirectChild,
+                        required_files: locator.required_files.clone(),
+                        required_dirs: locator.required_dirs.clone(),
+                        rule: rule.clone(),
+                    }),
+                    _ => unreachable!("validated catalog matcher"),
+                }
+            }
+        }
         Self {
             context,
             fixed_targets,
+            marker_targets,
         }
     }
 }
 
-/// Only variables whose values are exact tool-cache roots are accepted. The
-/// catalog deliberately does not inspect generic `$HOME`, `$TMPDIR`, package
-/// roots, or command output.
-const ENVIRONMENT_OVERRIDES: &[&str] = &[
-    "PIP_CACHE_DIR",
-    "CCACHE_DIR",
-    "SCCACHE_DIR",
-    "VCPKG_DEFAULT_BINARY_CACHE",
-    "OPTIX_CACHE_PATH",
-];
+impl MarkerTarget {
+    fn matches(&self, dir: &Path, kind: PlatformKind) -> bool {
+        let location_matches = match self.matcher {
+            MarkerMatcher::Descendant => is_under(dir, &self.root, kind),
+            MarkerMatcher::DirectChild => dir
+                .parent()
+                .is_some_and(|parent| path_eq(parent, &self.root, kind)),
+        };
+        location_matches
+            && self
+                .required_files
+                .iter()
+                .all(|name| dir.join(name).is_file())
+            && self
+                .required_dirs
+                .iter()
+                .all(|name| dir.join(name).is_dir())
+    }
+}
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct RuleSpec {
-    id: &'static str,
+    id: String,
     category: Category,
     severity: Severity,
     policy: FindingPolicy,
-    note: &'static str,
-    source_url: &'static str,
-    recovery_cost: &'static str,
-    reviewed_at: &'static str,
-    preconditions: &'static [&'static str],
-    advice: Option<&'static str>,
+    note: String,
+    source_url: String,
+    recovery_cost: String,
+    reviewed_at: String,
+    preconditions: Vec<String>,
+    advice: Option<String>,
 }
 
 impl RuleSpec {
-    fn to_match(self) -> Match {
+    fn from_raw(raw: &RawRule) -> Self {
+        Self {
+            id: raw.id.clone(),
+            category: category(&raw.category),
+            severity: recovery(&raw.recovery),
+            policy: cleanup_policy(&raw.cleanup_policy),
+            note: raw.note.clone(),
+            source_url: raw.source_url.clone(),
+            recovery_cost: raw.recovery_note.clone(),
+            reviewed_at: raw.reviewed_at.clone(),
+            preconditions: raw.preconditions.clone(),
+            advice: raw.advice.clone(),
+        }
+    }
+
+    fn to_match(&self) -> Match {
         Match {
             category: self.category,
             severity: self.severity,
-            note: self.note.into(),
+            note: self.note.clone(),
         }
     }
 
-    fn metadata(self) -> CatalogMetadata {
+    fn metadata(&self) -> CatalogMetadata {
         CatalogMetadata {
             provenance: RuleProvenance {
-                rule_id: self.id.into(),
-                source_url: self.source_url.into(),
+                rule_id: self.id.clone(),
+                source_url: self.source_url.clone(),
                 policy: self.policy,
-                recovery_cost: self.recovery_cost.into(),
-                reviewed_at: self.reviewed_at.into(),
-                preconditions: self
-                    .preconditions
-                    .iter()
-                    .map(|item| (*item).into())
-                    .collect(),
+                recovery_cost: self.recovery_cost.clone(),
+                reviewed_at: self.reviewed_at.clone(),
+                preconditions: self.preconditions.clone(),
             },
-            advice: self.advice.map(str::to_owned),
+            advice: self.advice.clone(),
         }
     }
 }
 
-const REVIEWED_AT: &str = "2026-08-26";
-const OWNED_CACHE: &[&str] = &[
-    "the path is the exact documented cache root",
-    "the path remains inside a Chystik-owned user root",
-];
-const CUSTOM_OWNED_CACHE: &[&str] = &[
-    "the environment override names an exact tool-cache root",
-    "the resolved path remains inside a Chystik-owned user root",
-];
-const INSTALLER_LAYOUT: &[&str] = &[
-    "the path is under the exact vendor staging root",
-    "the documented installer layout markers are present",
-];
-const XCODE_DEVELOPER_DATA: &[&str] = &[
-    "the path is the exact Xcode developer-data child",
-    "Xcode should be closed before manual cleanup",
-];
-const VENDOR_COMMAND: &[&str] = &[
-    "Chystik must not move this path to Trash",
-    "use the owning operating-system or vendor command instead",
-];
-
-const PIP: RuleSpec = RuleSpec {
-    id: "python.pip.cache",
-    category: Category::PackageCaches,
-    severity: Severity::Safe,
-    policy: FindingPolicy::DirectSafe,
-    note: "pip download and wheel cache — refetched by the next install",
-    source_url: "https://pip.pypa.io/en/stable/topics/caching/",
-    recovery_cost: "the next package install re-downloads cached artifacts",
-    reviewed_at: REVIEWED_AT,
-    preconditions: OWNED_CACHE,
-    advice: None,
-};
-
-const COCOAPODS: RuleSpec = RuleSpec {
-    id: "ios.cocoapods.cache",
-    category: Category::PackageCaches,
-    severity: Severity::Safe,
-    policy: FindingPolicy::DirectSafe,
-    note: "CocoaPods download cache — restored by the next pod install",
-    source_url: "https://guides.cocoapods.org/using/faq.html",
-    recovery_cost: "pods are downloaded again on the next install",
-    reviewed_at: REVIEWED_AT,
-    preconditions: OWNED_CACHE,
-    advice: None,
-};
-
-const CCACHE: RuleSpec = RuleSpec {
-    id: "cpp.ccache",
-    category: Category::PackageCaches,
-    severity: Severity::Safe,
-    policy: FindingPolicy::DirectSafe,
-    note: "ccache compiler outputs — rebuilt while C/C++ projects compile",
-    source_url: "https://ccache.dev/manual/latest.html",
-    recovery_cost: "the next C/C++ build recompiles cache misses",
-    reviewed_at: REVIEWED_AT,
-    preconditions: OWNED_CACHE,
-    advice: None,
-};
-
-const SCCACHE: RuleSpec = RuleSpec {
-    id: "cpp.sccache",
-    category: Category::PackageCaches,
-    severity: Severity::Safe,
-    policy: FindingPolicy::DirectSafe,
-    note: "sccache compiler outputs — rebuilt while projects compile",
-    source_url: "https://android.googlesource.com/toolchain/sccache/+/HEAD/docs/Local.md",
-    recovery_cost: "the next compiler run repopulates local cache entries",
-    reviewed_at: REVIEWED_AT,
-    preconditions: OWNED_CACHE,
-    advice: None,
-};
-
-const VCPKG: RuleSpec = RuleSpec {
-    id: "cpp.vcpkg.binary-archives",
-    category: Category::PackageCaches,
-    severity: Severity::Safe,
-    policy: FindingPolicy::DirectSafe,
-    note: "vcpkg binary archives — rebuilt or downloaded by the next install",
-    source_url: "https://learn.microsoft.com/en-us/vcpkg/users/binarycaching",
-    recovery_cost: "the next vcpkg install rebuilds or downloads archives",
-    reviewed_at: REVIEWED_AT,
-    preconditions: OWNED_CACHE,
-    advice: None,
-};
-
-const OPTIX: RuleSpec = RuleSpec {
-    id: "nvidia.optix.cache",
-    category: Category::PackageCaches,
-    severity: Severity::Safe,
-    policy: FindingPolicy::DirectSafe,
-    note: "NVIDIA OptiX compilation cache — recreated by the next OptiX run",
-    source_url: "https://raytracing-docs.nvidia.com/optix9/api/OptiX_API_Reference.pdf",
-    recovery_cost: "the next OptiX workload recompiles kernels",
-    reviewed_at: REVIEWED_AT,
-    preconditions: OWNED_CACHE,
-    advice: None,
-};
-
-const OPTIX_CUSTOM: RuleSpec = RuleSpec {
-    id: "nvidia.optix.cache.custom-location",
-    policy: FindingPolicy::DirectReview,
-    preconditions: CUSTOM_OWNED_CACHE,
-    ..OPTIX
-};
-
-const NVIDIA_INSTALLER: RuleSpec = RuleSpec {
-    id: "nvidia.extracted-installer",
-    category: Category::Installers,
-    severity: Severity::Moderate,
-    policy: FindingPolicy::DirectReview,
-    note: "NVIDIA extracted driver installer — close setup before moving it to Trash",
-    source_url: "https://nvidia.custhelp.com/app/answers/detail/a_id/2985/",
-    recovery_cost: "re-download the NVIDIA driver package if setup is needed again",
-    reviewed_at: REVIEWED_AT,
-    preconditions: INSTALLER_LAYOUT,
-    advice: None,
-};
-
-const AMD_INSTALLER: RuleSpec = RuleSpec {
-    id: "amd.extracted-installer",
-    category: Category::Installers,
-    severity: Severity::Moderate,
-    policy: FindingPolicy::DirectReview,
-    note: "AMD extracted installer — confirm no install or repair is in progress",
-    source_url:
-        "https://rocm.docs.amd.com/projects/install-on-windows/en/latest/how-to/install.html",
-    recovery_cost: "re-download the AMD installer if it is needed for repair",
-    reviewed_at: REVIEWED_AT,
-    preconditions: INSTALLER_LAYOUT,
-    advice: None,
-};
-
-const XCODE_DERIVED: RuleSpec = RuleSpec {
-    id: "xcode.derived-data",
-    category: Category::IdeToolchains,
-    severity: Severity::Moderate,
-    policy: FindingPolicy::DirectReview,
-    note: "Xcode DerivedData — close Xcode; the selected project's build data is rebuilt",
-    source_url:
-        "https://developer.apple.com/documentation/Xcode-Release-Notes/xcode-26-release-notes",
-    recovery_cost: "the selected Xcode projects rebuild indexes and products",
-    reviewed_at: REVIEWED_AT,
-    preconditions: XCODE_DEVELOPER_DATA,
-    advice: None,
-};
-
-const XCODE_DEVICE_SUPPORT: RuleSpec = RuleSpec {
-    id: "xcode.ios-device-support",
-    category: Category::IdeToolchains,
-    severity: Severity::Moderate,
-    policy: FindingPolicy::DirectReview,
-    note: "Xcode iOS DeviceSupport — device symbols download again when needed",
-    source_url: "https://developer.apple.com/forums/thread/683496",
-    recovery_cost: "connect a device again to download its support files",
-    reviewed_at: REVIEWED_AT,
-    preconditions: XCODE_DEVELOPER_DATA,
-    advice: None,
-};
-
-const CONAN: RuleSpec = RuleSpec {
-    id: "cpp.conan-cache",
-    category: Category::PackageCaches,
-    severity: Severity::Moderate,
-    policy: FindingPolicy::VendorCommandOnly,
-    note: "Conan package storage — clean it through Conan so package references stay valid",
-    source_url: "https://docs.conan.io/2/reference/commands/cache.html",
-    recovery_cost: "Conan downloads or rebuilds selected packages",
-    reviewed_at: REVIEWED_AT,
-    preconditions: VENDOR_COMMAND,
-    advice: Some("conan cache clean <reference> --download"),
-};
-
-const DIRECTX_SHADER: RuleSpec = RuleSpec {
-    id: "windows.directx-shader-cache",
-    category: Category::SystemJunk,
-    severity: Severity::Safe,
-    policy: FindingPolicy::AdvisoryOnly,
-    note: "Windows DirectX shader cache — clear it through Temporary files, not raw deletion",
-    source_url: "https://support.microsoft.com/en-us/windows/free-up-drive-space-in-windows-85529ccb-c365-4c84-8d63-4d518db795dc",
-    recovery_cost: "games and graphics applications rebuild shaders on first run",
-    reviewed_at: REVIEWED_AT,
-    preconditions: VENDOR_COMMAND,
-    advice: Some("Open Settings → System → Storage → Temporary files → DirectX Shader Cache"),
-};
-
-const AMD_SHADER: RuleSpec = RuleSpec {
-    id: "amd.shader-cache",
-    category: Category::SystemJunk,
-    severity: Severity::Safe,
-    policy: FindingPolicy::VendorCommandOnly,
-    note: "AMD shader cache — reset it through AMD Software: Adrenalin",
-    source_url: "https://www.amd.com/en/resources/support-articles/faqs/dh-012.html",
-    recovery_cost: "games rebuild shaders on their next start",
-    reviewed_at: REVIEWED_AT,
-    preconditions: VENDOR_COMMAND,
-    advice: Some("AMD Software: Adrenalin → Gaming → Graphics → Reset Shader Cache"),
-};
-
-const CORE_SIMULATOR: RuleSpec = RuleSpec {
-    id: "xcode.unavailable-simulators",
-    category: Category::IdeToolchains,
-    severity: Severity::Moderate,
-    policy: FindingPolicy::VendorCommandOnly,
-    note: "Unavailable iOS simulators — let simctl remove only devices without a runtime",
-    source_url: "https://developer.apple.com/forums/thread/835883",
-    recovery_cost: "unavailable simulator devices are removed; available runtimes stay intact",
-    reviewed_at: REVIEWED_AT,
-    preconditions: VENDOR_COMMAND,
-    advice: Some("xcrun simctl delete unavailable"),
-};
-
-#[cfg(test)]
-const CATALOG_RULES: &[RuleSpec] = &[
-    PIP,
-    COCOAPODS,
-    CCACHE,
-    SCCACHE,
-    VCPKG,
-    OPTIX,
-    OPTIX_CUSTOM,
-    NVIDIA_INSTALLER,
-    AMD_INSTALLER,
-    XCODE_DERIVED,
-    XCODE_DEVICE_SUPPORT,
-    CONAN,
-    DIRECTX_SHADER,
-    AMD_SHADER,
-    CORE_SIMULATOR,
-];
-
-fn details_with_targets(
-    dir: &Path,
-    context: &RuleContext,
-    targets: &[(PathBuf, &'static RuleSpec)],
-) -> Option<CatalogHit> {
-    if context.platform.is_link_or_reparse_point(dir) {
-        return None;
-    }
-
-    for (target, rule) in targets {
-        if path_eq(dir, target, context.kind) {
-            return Some(CatalogHit { rule });
-        }
-    }
-
-    for (environment, rule) in [
-        ("PIP_CACHE_DIR", &PIP),
-        ("CCACHE_DIR", &CCACHE),
-        ("SCCACHE_DIR", &SCCACHE),
-        ("VCPKG_DEFAULT_BINARY_CACHE", &VCPKG),
-    ] {
-        if context
-            .environment_target(environment)
-            .is_some_and(|target| path_eq(dir, target, context.kind))
-        {
-            return Some(CatalogHit { rule });
-        }
-    }
-    if context
-        .environment_target("OPTIX_CACHE_PATH")
-        .is_some_and(|target| path_eq(dir, target, context.kind))
-    {
-        return Some(CatalogHit {
-            rule: &OPTIX_CUSTOM,
-        });
-    }
-
-    if context.kind == PlatformKind::Windows {
-        let volume = context.roots.volume_root.as_deref()?;
-        let nvidia_root = volume.join("NVIDIA");
-        if is_under(dir, &nvidia_root, context.kind)
-            && dir.join("setup.exe").is_file()
-            && dir.join("Display.Driver").is_dir()
-        {
-            return Some(CatalogHit {
-                rule: &NVIDIA_INSTALLER,
-            });
-        }
-        let amd_root = volume.join("AMD");
-        if dir
-            .parent()
-            .is_some_and(|parent| path_eq(parent, &amd_root, context.kind))
-            && dir.join("Setup.exe").is_file()
-            && dir.join("Packages").is_dir()
-        {
-            return Some(CatalogHit {
-                rule: &AMD_INSTALLER,
-            });
-        }
-    }
-
-    None
+fn catalog_rules() -> &'static [RawRule] {
+    static RULES: OnceLock<Vec<RawRule>> = OnceLock::new();
+    RULES
+        .get_or_init(|| {
+            let mut rules = Vec::new();
+            for (name, source) in generated::CATALOG_SOURCES {
+                rules.extend(
+                    catalog_schema::parse_catalog(name, source)
+                        .expect("catalog was validated at build time"),
+                );
+            }
+            catalog_schema::validate_catalog(&rules).expect("catalog remains valid at runtime");
+            rules
+        })
+        .as_slice()
 }
 
-fn fixed_targets(context: &RuleContext) -> Vec<(PathBuf, &'static RuleSpec)> {
-    let roots = &context.roots;
-    let mut targets = Vec::new();
-    match context.kind {
-        PlatformKind::Linux => {
-            targets.extend([
-                (roots.cache_dir.join("pip"), &PIP),
-                (roots.home_dir.join(".ccache"), &CCACHE),
-                (roots.cache_dir.join("ccache"), &CCACHE),
-                (roots.cache_dir.join("sccache"), &SCCACHE),
-                (roots.cache_dir.join("vcpkg/archives"), &VCPKG),
-                (roots.home_dir.join(".conan2/p"), &CONAN),
-            ]);
-        }
-        PlatformKind::MacOS => {
-            if let (Some(caches), Some(developer)) = (
-                roots.library_caches_dir.as_ref(),
-                roots.developer_dir.as_ref(),
-            ) {
-                targets.extend([
-                    (caches.join("pip"), &PIP),
-                    (caches.join("ccache"), &CCACHE),
-                    (caches.join("Mozilla.sccache"), &SCCACHE),
-                    (caches.join("vcpkg/archives"), &VCPKG),
-                    (caches.join("CocoaPods"), &COCOAPODS),
-                    (roots.home_dir.join(".conan2/p"), &CONAN),
-                    (developer.join("Xcode/DerivedData"), &XCODE_DERIVED),
-                    (
-                        developer.join("Xcode/iOS DeviceSupport"),
-                        &XCODE_DEVICE_SUPPORT,
-                    ),
-                    (developer.join("CoreSimulator/Devices"), &CORE_SIMULATOR),
-                ]);
-            }
-        }
-        PlatformKind::Windows => {
-            if let Some(local) = roots.local_app_data_dir.as_ref() {
-                targets.extend([
-                    (local.join("pip/Cache"), &PIP),
-                    (local.join("ccache"), &CCACHE),
-                    (local.join("Mozilla/sccache"), &SCCACHE),
-                    (local.join("vcpkg/archives"), &VCPKG),
-                    (local.join("NVIDIA/OptixCache"), &OPTIX),
-                    (local.join("D3DSCache"), &DIRECTX_SHADER),
-                    (local.join("AMD/DxCache"), &AMD_SHADER),
-                    (local.join("AMD/DxcCache"), &AMD_SHADER),
-                ]);
-            }
-        }
-        PlatformKind::Unsupported => {}
+fn platform_matches(platform: &str, kind: PlatformKind) -> bool {
+    matches!(
+        (platform, kind),
+        ("all", _)
+            | ("linux", PlatformKind::Linux)
+            | ("macos", PlatformKind::MacOS)
+            | ("windows", PlatformKind::Windows)
+    )
+}
+
+fn resolve_root(locator: &RawLocator, context: &RuleContext) -> Option<PathBuf> {
+    match locator.root.as_str() {
+        "home" => Some(context.roots.home_dir.clone()),
+        "cache" => Some(context.roots.cache_dir.clone()),
+        "local-app-data" => context.roots.local_app_data_dir.clone(),
+        "library-caches" => context.roots.library_caches_dir.clone(),
+        "developer" => context.roots.developer_dir.clone(),
+        "volume-root" => context.roots.volume_root.clone(),
+        "environment" => locator
+            .environment
+            .as_deref()
+            .and_then(|name| context.environment_target(name))
+            .map(Path::to_path_buf),
+        _ => unreachable!("validated catalog root"),
     }
-    targets
+}
+
+fn join_relative(root: &Path, relative: Option<&str>) -> PathBuf {
+    let mut target = root.to_path_buf();
+    if let Some(relative) = relative {
+        for component in relative.split('/') {
+            target.push(component);
+        }
+    }
+    target
+}
+
+fn category(value: &str) -> Category {
+    match value {
+        "build-artifacts" => Category::BuildArtifacts,
+        "package-caches" => Category::PackageCaches,
+        "ide-toolchains" => Category::IdeToolchains,
+        "ai-models" => Category::AiModels,
+        "browser-system" => Category::BrowserSystem,
+        "android-dev" => Category::AndroidDev,
+        "ai-agents" => Category::AiAgents,
+        "containers" => Category::Containers,
+        "installers" => Category::Installers,
+        "game-launchers" => Category::GameLaunchers,
+        "media-apps" => Category::MediaApps,
+        "messengers" => Category::Messengers,
+        "cloud-sync" => Category::CloudSync,
+        "office-docs" => Category::OfficeDocs,
+        "system-junk" => Category::SystemJunk,
+        _ => unreachable!("validated catalog category"),
+    }
+}
+
+fn recovery(value: &str) -> Severity {
+    match value {
+        "automatic" => Severity::Safe,
+        "rebuild-redownload" => Severity::Moderate,
+        "manual-irreplaceable" => Severity::Risky,
+        _ => unreachable!("validated catalog recovery"),
+    }
+}
+
+fn cleanup_policy(value: &str) -> FindingPolicy {
+    match value {
+        "auto-cleanable" => FindingPolicy::DirectSafe,
+        "review-required" => FindingPolicy::DirectReview,
+        "tool-managed" => FindingPolicy::VendorCommandOnly,
+        "advisory-only" => FindingPolicy::AdvisoryOnly,
+        _ => unreachable!("validated catalog cleanup policy"),
+    }
 }
 
 fn is_under(path: &Path, root: &Path, kind: PlatformKind) -> bool {
@@ -535,8 +362,11 @@ fn path_eq(left: &Path, right: &Path, kind: PlatformKind) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
+
     use tempfile::tempdir;
+
+    const REVIEWED_AT: &str = "2026-08-26";
 
     fn context(kind: PlatformKind, root: &Path) -> RuleContext {
         RuleContext {
@@ -565,6 +395,134 @@ mod tests {
         Catalog::from_context(context.clone())
             .classify_with_metadata(dir)
             .is_none()
+    }
+
+    #[test]
+    fn declarative_catalog_retains_the_migrated_rule_contract() {
+        let expected = [
+            (
+                "python.pip.cache",
+                Category::PackageCaches,
+                Severity::Safe,
+                FindingPolicy::DirectSafe,
+            ),
+            (
+                "ios.cocoapods.cache",
+                Category::PackageCaches,
+                Severity::Safe,
+                FindingPolicy::DirectSafe,
+            ),
+            (
+                "cpp.ccache",
+                Category::PackageCaches,
+                Severity::Safe,
+                FindingPolicy::DirectSafe,
+            ),
+            (
+                "cpp.sccache",
+                Category::PackageCaches,
+                Severity::Safe,
+                FindingPolicy::DirectSafe,
+            ),
+            (
+                "cpp.vcpkg.binary-archives",
+                Category::PackageCaches,
+                Severity::Safe,
+                FindingPolicy::DirectSafe,
+            ),
+            (
+                "nvidia.optix.cache",
+                Category::PackageCaches,
+                Severity::Safe,
+                FindingPolicy::DirectSafe,
+            ),
+            (
+                "nvidia.optix.cache.custom-location",
+                Category::PackageCaches,
+                Severity::Safe,
+                FindingPolicy::DirectReview,
+            ),
+            (
+                "nvidia.extracted-installer",
+                Category::Installers,
+                Severity::Moderate,
+                FindingPolicy::DirectReview,
+            ),
+            (
+                "amd.extracted-installer",
+                Category::Installers,
+                Severity::Moderate,
+                FindingPolicy::DirectReview,
+            ),
+            (
+                "xcode.derived-data",
+                Category::IdeToolchains,
+                Severity::Moderate,
+                FindingPolicy::DirectReview,
+            ),
+            (
+                "xcode.ios-device-support",
+                Category::IdeToolchains,
+                Severity::Moderate,
+                FindingPolicy::DirectReview,
+            ),
+            (
+                "cpp.conan-cache",
+                Category::PackageCaches,
+                Severity::Moderate,
+                FindingPolicy::VendorCommandOnly,
+            ),
+            (
+                "windows.directx-shader-cache",
+                Category::SystemJunk,
+                Severity::Safe,
+                FindingPolicy::AdvisoryOnly,
+            ),
+            (
+                "amd.shader-cache",
+                Category::SystemJunk,
+                Severity::Safe,
+                FindingPolicy::VendorCommandOnly,
+            ),
+            (
+                "xcode.unavailable-simulators",
+                Category::IdeToolchains,
+                Severity::Moderate,
+                FindingPolicy::VendorCommandOnly,
+            ),
+        ];
+        let mut actual: Vec<_> = catalog_rules()
+            .iter()
+            .map(|raw| {
+                let rule = RuleSpec::from_raw(raw);
+                (
+                    rule.id,
+                    rule.category.as_str(),
+                    rule.severity.as_str(),
+                    rule.policy.as_str(),
+                )
+            })
+            .collect();
+        let mut expected: Vec<_> = expected
+            .into_iter()
+            .map(|(id, category, severity, policy)| {
+                (
+                    id.to_owned(),
+                    category.as_str(),
+                    severity.as_str(),
+                    policy.as_str(),
+                )
+            })
+            .collect();
+        actual.sort();
+        expected.sort();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn contributor_category_identifiers_match_the_validator_schema() {
+        assert_eq!(category("game-launchers"), Category::GameLaunchers);
+        assert_eq!(category("media-apps"), Category::MediaApps);
     }
 
     #[test]
@@ -660,7 +618,6 @@ mod tests {
             assert_eq!(metadata.provenance.rule_id, rule_id);
             assert_eq!(metadata.provenance.policy, policy);
         }
-
         let outside = root.path().join("external/pip");
         std::fs::create_dir_all(&outside).unwrap();
         context
@@ -670,7 +627,7 @@ mod tests {
     }
 
     #[test]
-    fn windows_roots_are_redirectable_and_architecture_neutral() {
+    fn windows_roots_markers_and_advisories_keep_siblings_out() {
         let root = tempdir().unwrap();
         let context = context(PlatformKind::Windows, root.path());
         let local = context.roots.local_app_data_dir.as_ref().unwrap();
@@ -710,24 +667,14 @@ mod tests {
                 "amd.shader-cache",
                 FindingPolicy::VendorCommandOnly,
             ),
-            (
-                local.join("AMD/DxcCache"),
-                "amd.shader-cache",
-                FindingPolicy::VendorCommandOnly,
-            ),
         ] {
             std::fs::create_dir_all(&target).unwrap();
             let metadata = details_in(&target, &context);
             assert_eq!(metadata.provenance.rule_id, rule_id);
             assert_eq!(metadata.provenance.policy, policy);
         }
-        assert!(is_unmatched(local.join("vcpkg").as_path(), &context));
-    }
+        assert!(is_unmatched(&local.join("vcpkg"), &context));
 
-    #[test]
-    fn windows_driver_installers_need_exact_roots_and_markers() {
-        let root = tempdir().unwrap();
-        let context = context(PlatformKind::Windows, root.path());
         let nvidia = context
             .roots
             .volume_root
@@ -750,13 +697,7 @@ mod tests {
             "amd.extracted-installer"
         );
         assert!(is_unmatched(
-            context
-                .roots
-                .volume_root
-                .as_ref()
-                .unwrap()
-                .join("AMD")
-                .as_path(),
+            &context.roots.volume_root.as_ref().unwrap().join("AMD"),
             &context
         ));
     }
@@ -767,51 +708,20 @@ mod tests {
         let context = context(PlatformKind::MacOS, root.path());
         let developer = context.roots.developer_dir.as_ref().unwrap();
         let caches = context.roots.library_caches_dir.as_ref().unwrap();
-        for (target, rule_id, policy) in [
-            (
-                caches.join("pip"),
-                "python.pip.cache",
-                FindingPolicy::DirectSafe,
-            ),
-            (
-                caches.join("ccache"),
-                "cpp.ccache",
-                FindingPolicy::DirectSafe,
-            ),
-            (
-                caches.join("Mozilla.sccache"),
-                "cpp.sccache",
-                FindingPolicy::DirectSafe,
-            ),
-            (
-                caches.join("vcpkg/archives"),
-                "cpp.vcpkg.binary-archives",
-                FindingPolicy::DirectSafe,
-            ),
-            (
-                caches.join("CocoaPods"),
-                "ios.cocoapods.cache",
-                FindingPolicy::DirectSafe,
-            ),
-            (
-                context.roots.home_dir.join(".conan2/p"),
-                "cpp.conan-cache",
-                FindingPolicy::VendorCommandOnly,
-            ),
-        ] {
-            std::fs::create_dir_all(&target).unwrap();
-            let metadata = details_in(&target, &context);
-            assert_eq!(metadata.provenance.rule_id, rule_id);
-            assert_eq!(metadata.provenance.policy, policy);
-        }
         let derived = developer.join("Xcode/DerivedData");
         let archives = developer.join("Xcode/Archives");
         std::fs::create_dir_all(&derived).unwrap();
         std::fs::create_dir_all(&archives).unwrap();
-
+        std::fs::create_dir_all(caches.join("CocoaPods")).unwrap();
         assert_eq!(
             details_in(&derived, &context).provenance.policy,
             FindingPolicy::DirectReview
+        );
+        assert_eq!(
+            details_in(&caches.join("CocoaPods"), &context)
+                .provenance
+                .policy,
+            FindingPolicy::DirectSafe
         );
         assert!(is_unmatched(&archives, &context));
         let sim = developer.join("CoreSimulator/Devices");
@@ -823,71 +733,20 @@ mod tests {
     }
 
     #[test]
-    fn vendor_command_rules_never_claim_direct_ownership() {
-        let root = tempdir().unwrap();
-        let context = context(PlatformKind::Windows, root.path());
-        let directx = context
-            .roots
-            .local_app_data_dir
-            .as_ref()
-            .unwrap()
-            .join("D3DSCache");
-        std::fs::create_dir_all(&directx).unwrap();
-
-        let metadata = details_in(&directx, &context);
-        assert_eq!(metadata.provenance.policy, FindingPolicy::AdvisoryOnly);
-        assert!(metadata.advice.is_some());
-
-        let amd = context
-            .roots
-            .local_app_data_dir
-            .as_ref()
-            .unwrap()
-            .join("AMD/DxcCache");
-        std::fs::create_dir_all(&amd).unwrap();
-        let metadata = details_in(&amd, &context);
-        assert_eq!(metadata.provenance.policy, FindingPolicy::VendorCommandOnly);
-        assert!(metadata
-            .advice
-            .as_deref()
-            .is_some_and(|advice| advice.contains("Adrenalin")));
-    }
-
-    #[test]
     fn catalog_metadata_is_complete_unique_and_reviewable() {
         let mut ids = BTreeSet::new();
-        for rule in CATALOG_RULES {
+        for rule in catalog_rules() {
             assert!(
-                ids.insert(rule.id),
+                ids.insert(&rule.id),
                 "duplicate catalog rule id: {}",
                 rule.id
             );
-            assert!(
-                rule.source_url.starts_with("https://"),
-                "{} needs a secure upstream source",
-                rule.id
-            );
-            assert!(
-                rule.preconditions
-                    .iter()
-                    .all(|condition| !condition.is_empty()),
-                "{} has an empty precondition",
-                rule.id
-            );
-            assert!(
-                !rule.preconditions.is_empty(),
-                "{} must declare its classification preconditions",
-                rule.id
-            );
-            assert!(
-                matches!(rule.reviewed_at.as_bytes(), [a, b, c, d, b'-', e, f, b'-', g, h]
-                    if [a, b, c, d, e, f, g, h]
-                        .iter()
-                        .all(|byte| byte.is_ascii_digit())),
-                "{} has an invalid reviewed_at date: {}",
-                rule.id,
-                rule.reviewed_at
-            );
+            assert!(rule.source_url.starts_with("https://"));
+            assert_eq!(rule.reviewed_at, REVIEWED_AT);
+            assert!(!rule.note.is_empty());
+            assert!(!rule.preconditions.is_empty());
+            assert!(!rule.locator.is_empty());
         }
+        assert_eq!(ids.len(), 15);
     }
 }

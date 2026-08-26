@@ -48,7 +48,8 @@ pub(crate) struct SelectionArgs {
     /// Add a scan root without relying on positional argument ordering.
     #[arg(long, value_name = "ROOT", value_hint = ValueHint::DirPath)]
     pub(crate) root: Vec<PathBuf>,
-    /// Limit displayed findings by safety severity.
+    /// Limit displayed findings by recovery cost. This is independent from
+    /// Chystik's cleanup policy.
     #[arg(long, value_enum)]
     pub(crate) severity: Option<SeverityArg>,
     /// Limit findings to one stable category name, for example `package_caches`.
@@ -76,8 +77,8 @@ pub(crate) struct SelectionArgs {
 pub(crate) struct ScanArgs {
     #[command(flatten)]
     pub(crate) selection: SelectionArgs,
-    /// Show only findings that regenerate automatically.
-    #[arg(long, conflicts_with = "severity")]
+    /// Show only findings eligible for automatic cleanup under Chystik policy.
+    #[arg(long, visible_alias = "auto-cleanable", conflicts_with = "severity")]
     pub(crate) safe: bool,
     #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
     pub(crate) format: OutputFormat,
@@ -106,14 +107,14 @@ pub(crate) struct ReportArgs {
 
 #[derive(Debug, Args)]
 #[command(
-    long_about = "Preview or move only explicitly safe findings to the platform native Trash. Direct deletion is not implemented.",
+    long_about = "Preview or move only findings eligible for automatic cleanup under Chystik policy to the platform native Trash. Direct deletion is not implemented.",
     after_help = "EXAMPLES:\n  chystik clean ~/work --safe --dry-run\n  chystik clean ~/work --safe --no-tui\n  chystik clean ~/work --safe --interactive\n\nEvery cleanup moves items only to native Trash after an explicit confirmation. --no-tui keeps line progress. --yes remains policy-gated and never bypasses exclusions, advisories, risky findings, or the cleanup guard."
 )]
 pub(crate) struct CleanArgs {
     #[command(flatten)]
     pub(crate) selection: SelectionArgs,
-    /// Required acknowledgement that only `safe` findings may be bulk-cleaned.
-    #[arg(long, required = true)]
+    /// Required acknowledgement that only auto-cleanable findings may be bulk-cleaned.
+    #[arg(long, visible_alias = "auto-cleanable", required = true)]
     pub(crate) safe: bool,
     /// Print the manifest but do not ask or modify the filesystem.
     #[arg(long)]

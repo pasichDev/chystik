@@ -52,6 +52,9 @@ platform adapter  →  scanner / rules  →  findings  →  GUI or CLI
 - The rule engine, shared application service, severity model, guard and
   cleaner are deterministic core. GUI and CLI call them rather than
   reimplementing scan roots, exclusions, cleanup manifests, or deletion.
+- Community catalog rules are reviewed TOML compiled into the release binary.
+  The catalog resolves only exact platform-owned paths; it does not download
+  rule packs, execute contributor commands, or bypass the guard.
 - A future local classifier receives `Finding` data to rank or explain. It
   cannot make an unsafe item actionable, modify guard decisions, or call a
   remover.
@@ -109,10 +112,10 @@ at runtime.
 
 ## Release and rollback policy
 
-A stable tag matching the exact Cargo version — for example `v0.1.0` for
-`version = "0.1.0"` — starts the release workflow. The tagged commit
+A stable tag matching the exact Cargo version — for example `vX.Y.Z` for
+`version = "X.Y.Z"` — starts the release workflow. The tagged commit
 must already be on `main`, and `CHANGELOG.md` must contain the matching dated
-section `## [0.1.0] - YYYY-MM-DD`; that section becomes the GitHub Release
+section `## [X.Y.Z] - YYYY-MM-DD`; that section becomes the GitHub Release
 body. The workflow validates every artifact before creating a release with the
 AppImage, its SHA-256 sidecar, the `.deb`, the `.rpm`, Windows x64 and ARM64
 portable ZIPs, and a `SHA256SUMS` manifest for all distributable files. Manual

@@ -83,6 +83,12 @@ jobs:
       - name: Tests
         run: cargo test --workspace
 
+      - name: Benchmark fixture smoke (scan only)
+        run: |
+          fixture="$RUNNER_TEMP/chystik-benchmark"
+          bash scripts/benchmark-fixture.sh "$fixture"
+          bash scripts/benchmark-scan.sh "$fixture" --runs 1
+
       - name: Native Linux Trash smoke
         run: |
           mkdir -p "$RUNNER_TEMP/chystik-trash-data"
