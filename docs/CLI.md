@@ -37,8 +37,9 @@ to stderr. No ANSI sequences are emitted in either machine format.
 
 Use `--verbose --no-tui` for the human evidence record: catalog-backed
 findings print their policy, stable rule ID, recovery cost, and upstream
-source URL. Those same fields appear under optional `finding.provenance` in
-JSON and JSONL. Legacy findings omit `provenance` rather than invent evidence.
+source URL, last-review date, and explicit classification conditions. Those
+same fields appear under optional `finding.provenance` in JSON and JSONL.
+Legacy findings omit `provenance` rather than invent evidence.
 
 In an interactive terminal, human `scan` opens a proper alternate-screen TUI:
 an animated loader, live counters, a colour-coded `SIZE / SEVERITY / CATEGORY / PATH`

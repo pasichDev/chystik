@@ -1,7 +1,5 @@
 //! Messengers & social clients (Telegram, Discord, Slack, Element):
 //! media/file caches only; chat history and account data stay untouched.
-//!
-//! Owner: child agent `rules-comms` on branch `v02/rules-comms`.
 
 use std::path::Path;
 

@@ -1,7 +1,5 @@
 //! Browser engines beyond the v0.1 chrome/mozilla cache roots:
 //! Chromium-family profiles, WebKitGTK, Brave/Vivaldi/Opera caches.
-//!
-//! Owner: child agent `rules-browsers` on branch `v02/rules-browsers`.
 
 use std::path::Path;
 

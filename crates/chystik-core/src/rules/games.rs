@@ -1,7 +1,5 @@
 //! Game launchers & stores (Steam, Lutris, Heroic, Epic): shader caches,
 //! Proton/Wine leftovers. User saves and installed games are never targets.
-//!
-//! Owner: child agent `rules-games` on branch `v02/rules-games`.
 
 use std::path::Path;
 

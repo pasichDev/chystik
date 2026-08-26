@@ -1,8 +1,6 @@
 //! Office & note apps (LibreOffice, Obsidian, OnlyOffice, Zathura):
 //! recovery data, lock/temp files, thumbnail registries. Documents are
 //! never targets.
-//!
-//! Owner: child agent `rules-office-docs` on branch `v02/rules-office-docs`.
 
 use std::path::Path;
 

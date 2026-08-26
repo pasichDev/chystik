@@ -510,7 +510,7 @@ fn write_jsonl_event(event: &AppScanEvent, output: &mut dyn Write) -> io::Result
             &FindingDocument {
                 metadata: MachineMetadata::now(),
                 kind: "finding",
-                finding,
+                finding: finding.as_ref(),
             },
         ),
         AppScanEvent::Finished(summary) => write_json_line(
@@ -719,6 +719,10 @@ fn write_human_scan(result: &ScanResult, quiet: bool, verbose: bool) {
                 println!("              rule: {}", provenance.rule_id);
                 println!("              recovery: {}", provenance.recovery_cost);
                 println!("              source: {}", provenance.source_url);
+                println!("              reviewed: {}", provenance.reviewed_at);
+                for precondition in &provenance.preconditions {
+                    println!("              requires: {precondition}");
+                }
             }
             if let Some(advice) = &finding.advice {
                 println!("              advice: {advice}");

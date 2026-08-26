@@ -1,4 +1,4 @@
-//! Safety guard — TO IMPLEMENT (core-engine agent).
+//! Safety guard.
 //!
 //! Hard refusals for dangerous targets. This module is the last line of
 //! defence before any deletion; every path passes through `check()`.

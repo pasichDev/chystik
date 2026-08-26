@@ -1,7 +1,4 @@
 //! Data model — the API contract between `chystik-core` and `chystik-gui`.
-//! Changes are coordinated by the orchestrator; the v0.2 extension
-//! (four new categories, `Finding::mount`) is approved and consumed
-//! across the workspace.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -213,6 +210,11 @@ pub struct RuleProvenance {
     pub policy: FindingPolicy,
     /// Concrete cost after removal, shown instead of a vague "cache" label.
     pub recovery_cost: String,
+    /// Date this exact rule was last checked against its upstream evidence.
+    pub reviewed_at: String,
+    /// Conditions that must hold before Chystik can classify this exact target.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub preconditions: Vec<String>,
 }
 
 /// One reclaimable item found on disk.
@@ -353,6 +355,8 @@ mod tests {
                 source_url: "https://example.test/vendor".into(),
                 policy: FindingPolicy::VendorCommandOnly,
                 recovery_cost: "the driver rebuilds shaders".into(),
+                reviewed_at: "2026-08-26".into(),
+                preconditions: vec!["use the vendor command".into()],
             }),
         );
 

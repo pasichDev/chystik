@@ -12,7 +12,8 @@ use std::time::{Duration, Instant};
 
 use eframe::egui;
 
-use chystik_core::model::{Category, Finding, ScanProgress};
+use chystik_core::app::AppScanEvent;
+use chystik_core::model::{Category, Finding};
 use chystik_core::platform::{self, StorageVolume};
 
 use crate::format::*;
@@ -30,7 +31,7 @@ pub(crate) struct ChystikApp {
     pub(crate) targets: Vec<ScanTarget>,
 
     pub(crate) state: ScanState,
-    pub(crate) rx: Receiver<ScanProgress>,
+    pub(crate) rx: Receiver<AppScanEvent>,
 
     pub(crate) findings: Vec<Finding>,
     /// Indices into `self.findings` currently ticked by the user.
@@ -102,7 +103,7 @@ impl Default for ChystikApp {
     fn default() -> Self {
         let exclusions_loaded = crate::exclusions::load();
         // Placeholder receiver replaced on first scan; never yields events.
-        let (_tx, rx) = channel::<ScanProgress>();
+        let (_tx, rx) = channel::<AppScanEvent>();
         Self {
             lang: i18n::detect(),
             disks: Vec::new(),
@@ -625,7 +626,7 @@ impl ChystikApp {
         if roots.is_empty() {
             return;
         }
-        let (tx, rx) = channel::<ScanProgress>();
+        let (tx, rx) = channel::<AppScanEvent>();
         let cancel_flag = Arc::new(AtomicBool::new(false));
 
         self.reset_results();
@@ -646,38 +647,16 @@ impl ChystikApp {
                     include_advisories: true,
                     ..chystik_core::app::ScanRequest::default()
                 };
-                let collected = Arc::new(std::sync::Mutex::new(Vec::new()));
                 let callback_tx = tx.clone();
-                let callback_findings = collected.clone();
                 let result =
                     chystik_core::app::scan_stream(&request, &cancel_for_thread, move |event| {
-                        match event {
-                            chystik_core::app::AppScanEvent::Started { root } => {
-                                let _ = callback_tx.send(ScanProgress::Started { root });
-                            }
-                            chystik_core::app::AppScanEvent::DirectoriesScanned { count } => {
-                                let _ =
-                                    callback_tx.send(ScanProgress::DirectoriesScanned { count });
-                            }
-                            chystik_core::app::AppScanEvent::Finding(finding) => {
-                                callback_findings.lock().unwrap().push(finding.clone());
-                                let _ =
-                                    callback_tx.send(ScanProgress::FindingFound(Box::new(finding)));
-                            }
-                            chystik_core::app::AppScanEvent::Finished(_) => {
-                                let findings = callback_findings.lock().unwrap().clone();
-                                let _ = callback_tx.send(ScanProgress::Finished { findings });
-                            }
-                            chystik_core::app::AppScanEvent::Cancelled => {
-                                let _ = callback_tx.send(ScanProgress::Cancelled);
-                            }
-                        }
+                        let _ = callback_tx.send(event);
                     });
                 if let Err(e) = result {
                     if !matches!(e, chystik_core::ChystikError::Cancelled) {
                         eprintln!("[chystik] scan error: {e}");
                         // Best-effort terminal event so the UI never hangs.
-                        let _ = tx.send(ScanProgress::Cancelled);
+                        let _ = tx.send(AppScanEvent::Cancelled);
                     }
                 }
             });
@@ -702,31 +681,27 @@ impl ChystikApp {
 
     /// Drain the scanner channel; keep repainting while a scan is active.
     ///
-    /// `scan_many` emits exactly one terminal event for the whole run, so
+    /// The shared streaming scan emits exactly one terminal event for the
+    /// whole run, so
     /// joining the worker here can never block the UI thread mid-scan.
     pub(crate) fn poll_scanner(&mut self, ctx: &egui::Context) {
         let s = self.s();
         loop {
             match self.rx.try_recv() {
                 Ok(event) => match event {
-                    ScanProgress::Started { root } => {
+                    AppScanEvent::Started { root } => {
                         self.progress_text =
                             format!("{} {}\u{2026}", s.scanning_target.as_str(), root.display());
                     }
-                    ScanProgress::DirectoriesScanned { count } => {
+                    AppScanEvent::DirectoriesScanned { count } => {
                         self.dir_count = count.max(self.dir_count);
                     }
-                    ScanProgress::FindingFound(finding) => {
+                    AppScanEvent::Finding(finding) => {
                         self.live_bytes += finding.size_bytes;
                         self.findings.push(*finding);
                     }
-                    ScanProgress::Finished { findings } => {
-                        // Wholesale replacement: the streamed list and the
-                        // final one can have the same length with different
-                        // contents, which the stamp cannot tell apart.
-                        self.findings = findings;
+                    AppScanEvent::Finished(_) => {
                         self.view_stamp = None;
-                        self.live_bytes = self.findings.iter().map(|f| f.size_bytes).sum();
                         self.dir_count = 0;
                         self.refresh_disks(); // free space moved during the walk
                         self.progress_text = format!(
@@ -738,7 +713,7 @@ impl ChystikApp {
                         );
                         self.finish_scan();
                     }
-                    ScanProgress::Cancelled => {
+                    AppScanEvent::Cancelled => {
                         self.progress_text = i18n::fill(
                             s.cancelled_summary.as_str(),
                             &[("n", &self.findings.len().to_string())],

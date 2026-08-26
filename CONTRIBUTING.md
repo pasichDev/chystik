@@ -95,9 +95,10 @@ instead — see `marker_rule` there, and note the `VENDOR_TREES` exclusion:
 `npm install`.
 
 Cross-platform developer and driver rules live in `rules/catalog.rs`. They
-must have a stable `rule_id`, exact platform locator, `FindingPolicy`, concrete
-recovery cost, primary vendor/upstream `source_url`, and a sibling-negative
-test. `DirectSafe` is the only policy allowed into `clean --safe`; use
+must have a stable unique `rule_id`, exact platform locator, `FindingPolicy`,
+concrete recovery cost, primary vendor/upstream HTTPS `source_url`, review
+date, explicit preconditions, and a positive plus sibling-negative fixture.
+`DirectSafe` is the only policy allowed into `clean --safe`; use
 `DirectReview` for an explicit manual decision and `AdvisoryOnly` or
 `VendorCommandOnly` when the owning tool must clean it. Never add a broad
 application, profile, driver-store, project, virtual-environment, or system

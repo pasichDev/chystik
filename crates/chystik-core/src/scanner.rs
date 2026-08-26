@@ -1,6 +1,5 @@
-//! Parallel filesystem scanner — TO IMPLEMENT (core-engine agent).
+//! Parallel filesystem scanner.
 //!
-//! Requirements:
 //! - jwalk-based parallel walk with per-entry metadata (size via st_blocks,
 //!   mtime)
 //! - prune well-known non-interesting subtrees early (proc/sys/dev/node_modules
@@ -62,7 +61,7 @@ pub struct ScanSummary {
 pub enum ScanStreamEvent {
     Started { root: PathBuf },
     DirectoriesScanned { count: u64 },
-    FindingFound(Finding),
+    FindingFound(Box<Finding>),
     Finished(ScanSummary),
     Cancelled,
 }
@@ -124,8 +123,8 @@ pub fn scan_many(
             let _ = compatibility_tx.send(ScanProgress::DirectoriesScanned { count });
         }
         ScanStreamEvent::FindingFound(finding) => {
-            collected.lock().unwrap().push(finding.clone());
-            let _ = compatibility_tx.send(ScanProgress::FindingFound(Box::new(finding)));
+            collected.lock().unwrap().push((*finding).clone());
+            let _ = compatibility_tx.send(ScanProgress::FindingFound(finding));
         }
         ScanStreamEvent::Finished(_) | ScanStreamEvent::Cancelled => {}
     });
@@ -176,9 +175,10 @@ where
         }
         counted_callback(event);
     });
+    let rule_engine = rules::RuleEngine::current();
 
     for root in roots {
-        if let Err(error) = scan_root(root, options, cancel, &dirs, &emit) {
+        if let Err(error) = scan_root(root, options, cancel, &dirs, &emit, &rule_engine) {
             if matches!(error, ChystikError::Cancelled) {
                 callback(ScanStreamEvent::Cancelled);
             }
@@ -189,7 +189,7 @@ where
         // Appended once for the whole run, not per root: these are absolute
         // system locations, unrelated to what the user chose to scan.
         for finding in crate::advisories::probe() {
-            emit(ScanStreamEvent::FindingFound(finding));
+            emit(ScanStreamEvent::FindingFound(Box::new(finding)));
         }
     }
     let summary = ScanSummary {
@@ -208,6 +208,7 @@ fn scan_root(
     cancel: &Arc<AtomicBool>,
     dirs: &Arc<AtomicU64>,
     emit: &Arc<dyn Fn(ScanStreamEvent) + Send + Sync>,
+    rule_engine: &rules::RuleEngine,
 ) -> Result<(), ChystikError> {
     if cancel.load(Ordering::Relaxed) {
         return Err(ChystikError::Cancelled);
@@ -220,6 +221,7 @@ fn scan_root(
     let walker_emit = emit.clone();
     let walker_dirs = dirs.clone();
     let walker_cancel = cancel.clone();
+    let walker_rules = rule_engine.clone();
     let mut skip = options.skip_names.clone();
     if options.skip_unscannable_mounts {
         skip.extend(
@@ -303,7 +305,7 @@ fn scan_root(
                         advice: None,
                         provenance: None,
                     };
-                    walker_emit(ScanStreamEvent::FindingFound(finding));
+                    walker_emit(ScanStreamEvent::FindingFound(Box::new(finding)));
                 }
                 return;
             }
@@ -328,7 +330,7 @@ fn scan_root(
                 if n.is_multiple_of(1000) {
                     walker_emit(ScanStreamEvent::DirectoriesScanned { count: n });
                 }
-                if let Some(classified) = rules::classify_with_metadata(&path) {
+                if let Some(classified) = walker_rules.classify_with_metadata(&path) {
                     let m = classified.matched;
                     let catalog = classified.catalog;
                     let (size_bytes, last_used) = dir_stats(&path, &walker_cancel, host);
@@ -351,7 +353,7 @@ fn scan_root(
                             .and_then(|metadata| metadata.advice.clone()),
                         provenance: catalog.map(|metadata| metadata.provenance),
                     };
-                    walker_emit(ScanStreamEvent::FindingFound(finding));
+                    walker_emit(ScanStreamEvent::FindingFound(Box::new(finding)));
                 }
             }
         });

@@ -1,6 +1,5 @@
-//! Core rule set (v0.1) — marker-gated project outputs plus known `$HOME`
-//! cache roots. Behavior is unchanged from v0.1; new domains live in
-//! sibling modules. Owned by the orchestrator.
+//! Core rule set — marker-gated project outputs plus known `$HOME` cache
+//! roots. Domain-specific rules live in sibling modules.
 
 use std::path::Path;
 
