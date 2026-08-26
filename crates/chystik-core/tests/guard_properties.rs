@@ -1,7 +1,10 @@
 //! Generated path shapes for the cleanup guard. These tests create only
 //! isolated fixture trees; they never call the cleaner or a Trash adapter.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+
+#[cfg(unix)]
+use std::path::PathBuf;
 
 use chystik_core::guard;
 use proptest::prelude::*;
