@@ -559,7 +559,7 @@ impl ChystikApp {
             .title_bar(false)
             .id(egui::Id::new("settings_window"))
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .order(egui::Order::Tooltip)
+            .order(settings_modal_order())
             .resizable(false)
             .collapsible(false)
             .frame(
@@ -587,29 +587,23 @@ impl ChystikApp {
 
                 ui.label(txt(s.settings_language.as_str(), "micro", COL_TEXT3));
                 ui.add_space(space(1.5));
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = space(1.5);
-                    for option in Lang::ALL {
-                        let active = option == lang;
-                        let (fill, stroke, fg) = if active {
-                            (COL_ACCENT_SOFT, COL_ACCENT, COL_TEXT)
-                        } else {
-                            (egui::Color32::TRANSPARENT, COL_LINE_HI, COL_TEXT2)
-                        };
-                        if ui
-                            .add(
-                                egui::Button::new(txt(option.name(), "strong", fg))
-                                    .fill(fill)
-                                    .stroke(egui::Stroke::new(1.0_f32, stroke))
-                                    .rounding(egui::Rounding::same(R_MD))
-                                    .min_size(egui::vec2(150.0, space(8.5))),
-                            )
-                            .clicked()
-                        {
-                            next_lang = Some(option);
+                egui::ComboBox::from_id_salt("settings_language")
+                    .selected_text(txt(lang.name(), "strong", COL_TEXT))
+                    .width(ui.available_width())
+                    .show_ui(ui, |ui| {
+                        let mut selected = lang;
+                        for option in Lang::ALL {
+                            let label = format!("{}  ·  {}", option.name(), option.code());
+                            ui.selectable_value(
+                                &mut selected,
+                                option,
+                                txt(label, "strong", COL_TEXT),
+                            );
                         }
-                    }
-                });
+                        if selected != lang {
+                            next_lang = Some(selected);
+                        }
+                    });
 
                 ui.add_space(space(5.0));
                 ui.painter().hline(
@@ -795,6 +789,13 @@ impl ChystikApp {
     }
 }
 
+/// The settings window must not cover a ComboBox popup. egui renders those
+/// menus on `Foreground`, while the prior `Tooltip` window layer covered the
+/// opened language menu completely.
+fn settings_modal_order() -> egui::Order {
+    egui::Order::Foreground
+}
+
 /// Full-screen dimmed layer that swallows clicks behind a modal window.
 pub(crate) fn dim_backdrop(ctx: &egui::Context, id: &str) {
     egui::Area::new(egui::Id::new(id))
@@ -812,4 +813,17 @@ pub(crate) fn dim_backdrop(ctx: &egui::Context, id: &str) {
                 egui::Color32::from_black_alpha((165.0 * t) as u8),
             );
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_modal_stays_below_its_language_picker_popup() {
+        // `ComboBox` uses egui's Foreground popup layer. A settings window
+        // above it makes the selector look inert even though it receives the
+        // click and opens its menu.
+        assert_eq!(settings_modal_order(), egui::Order::Foreground);
+    }
 }

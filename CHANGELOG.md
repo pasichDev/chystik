@@ -4,6 +4,22 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-08-27
+
+### Added
+
+- German, Spanish, French, Italian, Polish, Brazilian Portuguese, Romanian,
+  and Turkish interface translations alongside English and Ukrainian.
+- A full-width language picker in Settings with all ten supported locales.
+
+### Fixed
+
+- Treat native Trash / Recycle Bin locations as hard scanner boundaries,
+  including normalized and physical alias paths, so Chystik never reports an
+  item that it would attempt to move into the same recovery store.
+- Keep the settings language picker above the settings dialog so its menu is
+  selectable instead of being hidden behind the modal.
+
 ## [0.2.3] - 2026-08-26
 
 ### Added

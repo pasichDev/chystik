@@ -157,6 +157,13 @@ impl Adapter for Windows {
         roots
     }
 
+    fn native_trash_roots(&self) -> Vec<PathBuf> {
+        logical_drives()
+            .into_iter()
+            .map(|drive| drive.join("$Recycle.Bin"))
+            .collect()
+    }
+
     fn storage_stats(&self, path: &Path) -> Option<StorageStats> {
         storage_stats(path)
     }

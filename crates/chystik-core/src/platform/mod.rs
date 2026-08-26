@@ -127,6 +127,10 @@ trait Adapter: Send + Sync {
     fn storage_volumes(&self) -> Vec<StorageVolume>;
     fn unscannable_roots(&self) -> Vec<PathBuf>;
     fn default_skip_roots(&self) -> Vec<PathBuf>;
+    /// Native Trash / Recycle Bin roots. These are never valid scan or
+    /// cleanup targets: moving an item already in recovery storage back into
+    /// the same recovery storage is undefined and can lose its metadata.
+    fn native_trash_roots(&self) -> Vec<PathBuf>;
     fn storage_stats(&self, path: &Path) -> Option<StorageStats>;
     fn allocated_bytes(&self, metadata: &Metadata) -> u64;
     fn path_identity(&self, path: &Path) -> Option<PathIdentity>;
@@ -175,6 +179,43 @@ impl Platform {
 
     pub fn default_skip_roots(self) -> Vec<PathBuf> {
         self.adapter.default_skip_roots()
+    }
+
+    /// Exact native Trash / Recycle Bin roots owned by the host platform.
+    ///
+    /// The scanner uses these as an unconditional prune list, while the
+    /// cleanup guard treats every descendant as protected. This is separate
+    /// from `default_skip_roots`: an explicit scan may opt into a normal
+    /// skipped system directory, but it must never opt into native Trash.
+    pub fn native_trash_roots(self) -> Vec<PathBuf> {
+        let mut roots = self.adapter.native_trash_roots();
+        // The desktop's logical Trash location may itself be a symlink (for
+        // example, an XDG data directory on another volume). The scanner can
+        // encounter its physical spelling while walking that volume, so keep
+        // both exact spellings as hard boundaries. A missing Trash root still
+        // remains protected through its logical spelling.
+        let physical_roots: Vec<_> = roots
+            .iter()
+            .filter_map(|root| std::fs::canonicalize(root).ok())
+            .collect();
+        roots.extend(physical_roots);
+        roots.sort();
+        roots.dedup();
+        roots
+    }
+
+    /// True when `path` is a native Trash / Recycle Bin root or descendant.
+    pub fn is_native_trash_path(self, path: &Path) -> bool {
+        let case_insensitive = matches!(self.kind(), PlatformKind::Windows);
+        // This is lexical only: it neither follows an arbitrary candidate
+        // link nor changes what the guard authorises. It makes equivalent
+        // spellings such as `Trash/files/../files/item` hit the same native
+        // Trash boundary during scanning and final guard validation.
+        let normalized = crate::guard::normalize_lexically(path);
+        let path = normalized.as_deref().unwrap_or(path);
+        self.native_trash_roots()
+            .iter()
+            .any(|root| is_under(path, root, case_insensitive))
     }
 
     pub fn storage_stats(self, path: &Path) -> Option<StorageStats> {
@@ -337,7 +378,7 @@ fn unix_is_link(path: &Path) -> bool {
         .unwrap_or(true)
 }
 
-fn is_under(path: &Path, root: &Path, case_insensitive: bool) -> bool {
+pub(crate) fn is_under(path: &Path, root: &Path, case_insensitive: bool) -> bool {
     if !case_insensitive {
         return path.starts_with(root);
     }
@@ -369,6 +410,27 @@ mod tests {
             current().cleanup_support(),
             CleanupSupport::NativeTrash | CleanupSupport::ScanOnly { .. }
         ));
+    }
+
+    #[test]
+    fn native_trash_roots_are_absolute_and_recognize_descendants() {
+        let host = current();
+        let trash_roots = host.native_trash_roots();
+        if host.cleanup_support().is_available() {
+            assert!(
+                !trash_roots.is_empty(),
+                "a native-trash platform must expose its protected roots"
+            );
+        }
+        for root in trash_roots {
+            assert!(
+                root.is_absolute(),
+                "native Trash root must be absolute: {root:?}"
+            );
+            assert!(host.is_native_trash_path(&root));
+            assert!(host.is_native_trash_path(&root.join("files/chystik-fixture")));
+            assert!(host.is_native_trash_path(&root.join("files/../files/chystik-fixture")));
+        }
     }
 
     #[test]

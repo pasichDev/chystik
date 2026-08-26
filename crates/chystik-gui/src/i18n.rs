@@ -26,16 +26,43 @@ use serde::Deserialize;
 pub enum Lang {
     En,
     Uk,
+    De,
+    Es,
+    Fr,
+    It,
+    Pl,
+    PtBr,
+    Ro,
+    Tr,
 }
 
 impl Lang {
-    pub const ALL: [Lang; 2] = [Lang::En, Lang::Uk];
+    pub const ALL: [Lang; 10] = [
+        Lang::En,
+        Lang::Uk,
+        Lang::De,
+        Lang::Es,
+        Lang::Fr,
+        Lang::It,
+        Lang::Pl,
+        Lang::PtBr,
+        Lang::Ro,
+        Lang::Tr,
+    ];
 
     /// Short label for the language switcher.
     pub fn code(self) -> &'static str {
         match self {
             Lang::En => "EN",
             Lang::Uk => "UA",
+            Lang::De => "DE",
+            Lang::Es => "ES",
+            Lang::Fr => "FR",
+            Lang::It => "IT",
+            Lang::Pl => "PL",
+            Lang::PtBr => "PT-BR",
+            Lang::Ro => "RO",
+            Lang::Tr => "TR",
         }
     }
 
@@ -44,6 +71,14 @@ impl Lang {
         match self {
             Lang::En => "English",
             Lang::Uk => "Українська",
+            Lang::De => "Deutsch",
+            Lang::Es => "Español",
+            Lang::Fr => "Français",
+            Lang::It => "Italiano",
+            Lang::Pl => "Polski",
+            Lang::PtBr => "Português (Brasil)",
+            Lang::Ro => "Română",
+            Lang::Tr => "Türkçe",
         }
     }
 
@@ -52,6 +87,14 @@ impl Lang {
         match self {
             Lang::En => include_str!("../locales/en.json"),
             Lang::Uk => include_str!("../locales/uk.json"),
+            Lang::De => include_str!("../locales/de.json"),
+            Lang::Es => include_str!("../locales/es.json"),
+            Lang::Fr => include_str!("../locales/fr.json"),
+            Lang::It => include_str!("../locales/it.json"),
+            Lang::Pl => include_str!("../locales/pl.json"),
+            Lang::PtBr => include_str!("../locales/pt_br.json"),
+            Lang::Ro => include_str!("../locales/ro.json"),
+            Lang::Tr => include_str!("../locales/tr.json"),
         }
     }
 }
@@ -69,10 +112,17 @@ pub fn detect() -> Lang {
         if value.is_empty() || value == "c" || value == "posix" {
             continue;
         }
-        return if value.starts_with("uk") {
-            Lang::Uk
-        } else {
-            Lang::En
+        return match value.split(['_', '.', '-']).next().unwrap_or_default() {
+            "uk" => Lang::Uk,
+            "de" => Lang::De,
+            "es" => Lang::Es,
+            "fr" => Lang::Fr,
+            "it" => Lang::It,
+            "pl" => Lang::Pl,
+            "pt" => Lang::PtBr,
+            "ro" => Lang::Ro,
+            "tr" => Lang::Tr,
+            _ => Lang::En,
         };
     }
     Lang::En
@@ -473,5 +523,43 @@ mod tests {
             );
         }
         assert_ne!(strings(Lang::En).scan, strings(Lang::Uk).scan);
+    }
+
+    #[test]
+    fn every_non_english_locale_translates_the_safety_critical_chrome() {
+        let english = strings(Lang::En);
+        for lang in Lang::ALL.into_iter().filter(|lang| *lang != Lang::En) {
+            let translated = strings(lang);
+            for (name, actual, source) in [
+                ("scan", &translated.scan, &english.scan),
+                (
+                    "move_to_trash",
+                    &translated.move_to_trash,
+                    &english.move_to_trash,
+                ),
+                (
+                    "recovery_heading",
+                    &translated.recovery_heading,
+                    &english.recovery_heading,
+                ),
+                (
+                    "cleanup_heading",
+                    &translated.cleanup_heading,
+                    &english.cleanup_heading,
+                ),
+                (
+                    "policy_direct_safe",
+                    &translated.policy_direct_safe,
+                    &english.policy_direct_safe,
+                ),
+                (
+                    "policy_direct_review",
+                    &translated.policy_direct_review,
+                    &english.policy_direct_review,
+                ),
+            ] {
+                assert_ne!(actual, source, "{lang:?} left {name} in English");
+            }
+        }
     }
 }
