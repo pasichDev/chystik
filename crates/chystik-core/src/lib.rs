@@ -26,4 +26,6 @@ pub mod scanner;
 pub mod severity;
 
 pub use disks::DiskInfo;
-pub use model::{Category, ChystikError, Finding, ScanProgress, Severity};
+pub use model::{
+    Category, ChystikError, Finding, FindingPolicy, RuleProvenance, ScanProgress, Severity,
+};

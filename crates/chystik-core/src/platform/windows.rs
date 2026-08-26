@@ -112,6 +112,23 @@ impl Adapter for Windows {
         }
     }
 
+    fn rule_roots(&self) -> super::RuleRoots {
+        let home_dir = super::privacy_home_dir_or_current();
+        let local_app_data_dir =
+            env_absolute("LOCALAPPDATA").or_else(|| Some(home_dir.join("AppData/Local")));
+        let volume_root = system_drive_root();
+        super::RuleRoots {
+            cache_dir: local_app_data_dir
+                .clone()
+                .unwrap_or_else(|| home_dir.join("AppData/Local")),
+            home_dir,
+            local_app_data_dir,
+            library_caches_dir: None,
+            developer_dir: None,
+            volume_root: Some(volume_root),
+        }
+    }
+
     fn storage_volumes(&self) -> Vec<StorageVolume> {
         logical_drives()
             .into_iter()
@@ -174,9 +191,7 @@ fn system_roots() -> &'static [PathBuf] {
 }
 
 fn system_roots_uncached() -> Vec<PathBuf> {
-    let system_drive = std::env::var_os("SystemDrive")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("C:"));
+    let system_drive = system_drive_root();
     let mut roots = vec![
         env_absolute("SystemRoot").unwrap_or_else(|| system_drive.join("Windows")),
         env_absolute("ProgramFiles").unwrap_or_else(|| system_drive.join("Program Files")),
@@ -186,6 +201,18 @@ fn system_roots_uncached() -> Vec<PathBuf> {
         roots.push(program_files_x86);
     }
     roots
+}
+
+fn system_drive_root() -> PathBuf {
+    let drive = std::env::var_os("SystemDrive")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("C:"));
+    let text = drive.to_string_lossy();
+    if text.ends_with('\\') || text.ends_with('/') {
+        drive
+    } else {
+        PathBuf::from(format!("{text}\\"))
+    }
 }
 
 /// These are per-volume system directories on every Windows drive. Checking

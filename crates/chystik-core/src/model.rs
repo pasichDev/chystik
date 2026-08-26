@@ -158,6 +158,63 @@ impl Category {
     }
 }
 
+/// How Chystik may handle a finding after it is shown to the user.
+///
+/// Severity answers how expensive it is to get the bytes back; this policy
+/// answers whether Chystik owns the cleanup action. Keeping the two concepts
+/// separate prevents a `Safe` label from accidentally authorizing a
+/// vendor-managed or system-owned location.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FindingPolicy {
+    /// A narrow, regenerable target that may participate in `clean --safe`.
+    DirectSafe,
+    /// A narrow target the user may review and select, but never bulk-select.
+    DirectReview,
+    /// A system or package-manager location Chystik only describes.
+    AdvisoryOnly,
+    /// A location that must be cleaned through its owning tool's command/UI.
+    VendorCommandOnly,
+    /// Deliberately never shown as a cleanup candidate.
+    NeverClean,
+}
+
+impl FindingPolicy {
+    /// Stable machine-readable policy identifier.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::DirectSafe => "direct_safe",
+            Self::DirectReview => "direct_review",
+            Self::AdvisoryOnly => "advisory_only",
+            Self::VendorCommandOnly => "vendor_command_only",
+            Self::NeverClean => "never_clean",
+        }
+    }
+
+    /// Whether the finding may ever reach the native Trash flow.
+    pub const fn is_actionable(self) -> bool {
+        matches!(self, Self::DirectSafe | Self::DirectReview)
+    }
+}
+
+/// Evidence attached to a catalog-backed finding.
+///
+/// Existing rules predate the catalog and intentionally omit this field. The
+/// optional shape preserves their public JSON contract while ensuring every
+/// newly-added cross-platform target tells users which source justified it and
+/// what recovery costs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuleProvenance {
+    /// Stable catalog identifier; never derive meaning from a filesystem path.
+    pub rule_id: String,
+    /// Primary vendor or upstream documentation that defines the target.
+    pub source_url: String,
+    /// The authority Chystik has over this exact target.
+    pub policy: FindingPolicy,
+    /// Concrete cost after removal, shown instead of a vague "cache" label.
+    pub recovery_cost: String,
+}
+
 /// One reclaimable item found on disk.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Finding {
@@ -183,13 +240,34 @@ pub struct Finding {
     /// Advisory findings are reported, never selected and never deleted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub advice: Option<String>,
+    /// Present for catalog-backed targets. Omitted for legacy rules so older
+    /// automation keeps receiving the same machine document it already knows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<RuleProvenance>,
 }
 
 impl Finding {
-    /// True when this finding is Chystik's to delete. Advisory findings are
-    /// excluded from every selection, total and deletion path.
+    /// Policy derived from explicit provenance or the legacy rule contract.
+    pub fn policy(&self) -> FindingPolicy {
+        self.provenance
+            .as_ref()
+            .map(|provenance| provenance.policy)
+            .unwrap_or_else(|| {
+                if self.advice.is_some() {
+                    FindingPolicy::AdvisoryOnly
+                } else if self.severity == Severity::Safe {
+                    FindingPolicy::DirectSafe
+                } else {
+                    FindingPolicy::DirectReview
+                }
+            })
+    }
+
+    /// True when this finding is Chystik's to delete. Advisory and vendor
+    /// command findings stay visible but never enter any selection or removal
+    /// path.
     pub fn is_actionable(&self) -> bool {
-        self.advice.is_none()
+        self.policy().is_actionable()
     }
 }
 
@@ -214,4 +292,71 @@ pub enum ChystikError {
     Io(#[from] std::io::Error),
     #[error("scan was cancelled")]
     Cancelled,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn finding(
+        severity: Severity,
+        advice: Option<&str>,
+        provenance: Option<RuleProvenance>,
+    ) -> Finding {
+        Finding {
+            path: PathBuf::from("/tmp/finding"),
+            category: Category::PackageCaches,
+            severity,
+            size_bytes: 1,
+            last_used: None,
+            mount: None,
+            note: "fixture".into(),
+            advice: advice.map(str::to_owned),
+            provenance,
+        }
+    }
+
+    #[test]
+    fn policy_serializes_as_stable_snake_case() {
+        assert_eq!(
+            serde_json::to_string(&FindingPolicy::VendorCommandOnly).unwrap(),
+            "\"vendor_command_only\""
+        );
+        assert_eq!(FindingPolicy::DirectReview.as_str(), "direct_review");
+    }
+
+    #[test]
+    fn legacy_findings_keep_their_existing_selection_contract() {
+        let safe = finding(Severity::Safe, None, None);
+        let moderate = finding(Severity::Moderate, None, None);
+        let advised = finding(Severity::Safe, Some("tool clean"), None);
+
+        assert_eq!(safe.policy(), FindingPolicy::DirectSafe);
+        assert_eq!(moderate.policy(), FindingPolicy::DirectReview);
+        assert_eq!(advised.policy(), FindingPolicy::AdvisoryOnly);
+        assert!(safe.is_actionable());
+        assert!(moderate.is_actionable());
+        assert!(!advised.is_actionable());
+        assert!(serde_json::to_value(&safe)
+            .unwrap()
+            .get("provenance")
+            .is_none());
+    }
+
+    #[test]
+    fn vendor_command_policy_cannot_become_actionable() {
+        let vendor = finding(
+            Severity::Safe,
+            Some("vendor reset"),
+            Some(RuleProvenance {
+                rule_id: "driver.amd.shader-cache".into(),
+                source_url: "https://example.test/vendor".into(),
+                policy: FindingPolicy::VendorCommandOnly,
+                recovery_cost: "the driver rebuilds shaders".into(),
+            }),
+        );
+
+        assert_eq!(vendor.policy(), FindingPolicy::VendorCommandOnly);
+        assert!(!vendor.is_actionable());
+    }
 }

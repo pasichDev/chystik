@@ -241,6 +241,7 @@ mod tests {
             mount: mount.map(String::from),
             note: String::new(),
             advice: None,
+            provenance: None,
         }
     }
 

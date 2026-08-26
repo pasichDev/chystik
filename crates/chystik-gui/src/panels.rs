@@ -409,12 +409,7 @@ impl ChystikApp {
             .rows
             .iter()
             .copied()
-            .filter(|i| {
-                let f = &self.findings[*i];
-                // Risky needs a deliberate tick; advisory is not ours to
-                // delete at all.
-                f.severity != Severity::Risky && f.is_actionable()
-            })
+            .filter(|i| is_bulk_safe_finding(&self.findings[*i]))
             .collect();
         let selectable_bytes: u64 = selectable
             .iter()
@@ -612,13 +607,9 @@ impl ChystikApp {
                             let mut checked = selected.contains(&idx);
 
                             row.col(|ui| {
-                                if let Some(command) = finding.advice.as_deref() {
-                                    paint_info_mark(ui, 13.0, COL_ACCENT).on_hover_text(format!(
-                                        "{}\n\n{}\n{}",
-                                        s.advice_label.as_str(),
-                                        s.advice_run.as_str(),
-                                        command
-                                    ));
+                                if !finding.is_actionable() {
+                                    paint_info_mark(ui, 13.0, COL_ACCENT)
+                                        .on_hover_text(finding_tooltip(lang, finding));
                                 } else if risky {
                                     // Never bulk-selectable: say why instead
                                     // of showing a dead checkbox.
@@ -703,13 +694,7 @@ impl ChystikApp {
                                     }
                                 })
                                 .response
-                                .on_hover_text(format!(
-                                    "{}\n\n{}\n\n{} \u{2014} {}",
-                                    full,
-                                    finding.note,
-                                    i18n::severity_label(lang, finding.severity),
-                                    i18n::severity_cost(lang, finding.severity),
-                                ))
+                                .on_hover_text(finding_tooltip(lang, finding))
                                 .context_menu(|ui| {
                                     if ui.button(s.exclusions_add.as_str()).clicked() {
                                         exclude_request = Some(finding.path.clone());
@@ -1220,6 +1205,46 @@ impl ChystikApp {
     }
 }
 
+/// Explain not only the severity but the authority and evidence behind one
+/// finding. Keeping this at the UI boundary leaves the scanner/CLI contract
+/// machine-readable while making the same evidence discoverable by hover.
+fn finding_tooltip(lang: i18n::Lang, finding: &chystik_core::model::Finding) -> String {
+    let strings = i18n::strings(lang);
+    let mut lines = vec![
+        finding.path.display().to_string(),
+        finding.note.clone(),
+        format!(
+            "{} — {}",
+            i18n::severity_label(lang, finding.severity),
+            i18n::severity_cost(lang, finding.severity),
+        ),
+        i18n::policy_label(lang, finding.policy()).to_owned(),
+    ];
+    if let Some(provenance) = &finding.provenance {
+        lines.push(format!("{}: {}", strings.evidence_rule, provenance.rule_id));
+        lines.push(format!(
+            "{}: {}",
+            strings.evidence_recovery, provenance.recovery_cost
+        ));
+        lines.push(format!(
+            "{}: {}",
+            strings.evidence_source, provenance.source_url
+        ));
+    }
+    if let Some(advice) = &finding.advice {
+        lines.push(format!("{}\n{}", strings.advice_run, advice));
+    }
+    lines.join("\n\n")
+}
+
+/// Bulk selection is a stricter promise than a manual tick: only findings
+/// that are both cheap to recreate and explicitly `DirectSafe` may enter it.
+/// A `DirectReview` finding remains available as a deliberate per-row choice.
+fn is_bulk_safe_finding(finding: &chystik_core::model::Finding) -> bool {
+    finding.severity == Severity::Safe
+        && finding.policy() == chystik_core::model::FindingPolicy::DirectSafe
+}
+
 /// A horizontal capacity bar.
 fn usage_bar(ui: &mut egui::Ui, fraction: f32, width: f32, color: egui::Color32) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 6.0), egui::Sense::hover());
@@ -1240,4 +1265,46 @@ fn short_home_path(path: &std::path::Path) -> String {
     full.strip_prefix(&home.to_string_lossy().into_owned())
         .map(|tail| format!("~{tail}"))
         .unwrap_or(full)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use chystik_core::model::{Category, Finding, FindingPolicy, RuleProvenance, Severity};
+
+    use super::is_bulk_safe_finding;
+
+    fn finding(policy: Option<FindingPolicy>) -> Finding {
+        Finding {
+            path: PathBuf::from("/tmp/finding"),
+            category: Category::PackageCaches,
+            severity: Severity::Safe,
+            size_bytes: 1,
+            last_used: None,
+            mount: None,
+            note: "fixture".into(),
+            advice: None,
+            provenance: policy.map(|policy| RuleProvenance {
+                rule_id: "fixture".into(),
+                source_url: "https://example.test".into(),
+                policy,
+                recovery_cost: "fixture".into(),
+            }),
+        }
+    }
+
+    #[test]
+    fn bulk_selection_accepts_only_direct_safe_policy() {
+        assert!(is_bulk_safe_finding(&finding(None)));
+        assert!(is_bulk_safe_finding(&finding(Some(
+            FindingPolicy::DirectSafe
+        ))));
+        assert!(!is_bulk_safe_finding(&finding(Some(
+            FindingPolicy::DirectReview
+        ))));
+        assert!(!is_bulk_safe_finding(&finding(Some(
+            FindingPolicy::VendorCommandOnly
+        ))));
+    }
 }

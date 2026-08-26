@@ -94,6 +94,17 @@ instead — see `marker_rule` there, and note the `VENDOR_TREES` exclusion:
 `node_modules` shipped inside an application is *not* restorable by
 `npm install`.
 
+Cross-platform developer and driver rules live in `rules/catalog.rs`. They
+must have a stable `rule_id`, exact platform locator, `FindingPolicy`, concrete
+recovery cost, primary vendor/upstream `source_url`, and a sibling-negative
+test. `DirectSafe` is the only policy allowed into `clean --safe`; use
+`DirectReview` for an explicit manual decision and `AdvisoryOnly` or
+`VendorCommandOnly` when the owning tool must clean it. Never add a broad
+application, profile, driver-store, project, virtual-environment, or system
+directory as a cleanup candidate. Treat third-party cleaner databases as
+research leads only: write original locators and explanations from primary
+vendor/upstream documentation; do not copy their rule text or metadata.
+
 ### Order matters
 
 `rules::classify` tries modules in a fixed order and the first match wins. If

@@ -13,7 +13,7 @@ use serde::Serialize;
 use crate::cleaner::{CleanupItem, CleanupOutcome, Remover};
 use crate::config::normalize_exclusions;
 use crate::guard;
-use crate::model::{Category, ChystikError, Finding, Severity};
+use crate::model::{Category, ChystikError, Finding, FindingPolicy, Severity};
 use crate::report::{self, CategorySummary};
 use crate::scanner::{self, ScanOptions};
 
@@ -438,7 +438,9 @@ pub fn build_safe_cleanup_plan(scan: &ScanResult, exclusions: &[PathBuf]) -> Saf
     for finding in &scan.findings {
         let reason = if !finding.is_actionable() {
             Some(PlanSkipReason::Advisory)
-        } else if finding.severity != Severity::Safe {
+        } else if finding.severity != Severity::Safe
+            || finding.policy() != FindingPolicy::DirectSafe
+        {
             Some(PlanSkipReason::NotSafe)
         } else if exclusions.iter().any(|root| finding.path.starts_with(root)) {
             Some(PlanSkipReason::Excluded)

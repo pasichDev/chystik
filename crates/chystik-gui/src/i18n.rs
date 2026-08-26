@@ -19,7 +19,7 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use chystik_core::model::{Category, Severity};
+use chystik_core::model::{Category, FindingPolicy, Severity};
 use serde::Deserialize;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -220,11 +220,18 @@ pub struct Strings {
     pub exclusions_remove: String,
     pub exclusions_empty: String,
     pub exclusions_unreadable: String,
-    pub advice_label: String,
     pub advice_run: String,
     pub advice_copy: String,
     pub advice_copied: String,
     pub shown_advisory: String,
+    pub policy_direct_safe: String,
+    pub policy_direct_review: String,
+    pub policy_advisory_only: String,
+    pub policy_vendor_command_only: String,
+    pub policy_never_clean: String,
+    pub evidence_rule: String,
+    pub evidence_recovery: String,
+    pub evidence_source: String,
     // sections, disks and privacy
     pub section_cleanup: String,
     pub section_disks: String,
@@ -321,6 +328,18 @@ pub fn severity_cost(lang: Lang, s: Severity) -> &'static str {
         .unwrap_or("")
 }
 
+/// What Chystik is authorised to do with this precise finding.
+pub fn policy_label(lang: Lang, policy: FindingPolicy) -> &'static str {
+    let strings = strings(lang);
+    match policy {
+        FindingPolicy::DirectSafe => strings.policy_direct_safe.as_str(),
+        FindingPolicy::DirectReview => strings.policy_direct_review.as_str(),
+        FindingPolicy::AdvisoryOnly => strings.policy_advisory_only.as_str(),
+        FindingPolicy::VendorCommandOnly => strings.policy_vendor_command_only.as_str(),
+        FindingPolicy::NeverClean => strings.policy_never_clean.as_str(),
+    }
+}
+
 /// `{n}` / `{size}` / `{c}` / `{items}` substitution. Deliberately tiny: a
 /// full ICU formatter would be more machinery than eighty strings deserve.
 pub fn fill(template: &str, pairs: &[(&str, &str)]) -> String {
@@ -373,6 +392,24 @@ mod tests {
                 assert!(
                     d.len() > 40,
                     "{lang:?} {c:?} description is too thin: {d:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_policy_has_a_localized_explanation() {
+        for lang in Lang::ALL {
+            for policy in [
+                FindingPolicy::DirectSafe,
+                FindingPolicy::DirectReview,
+                FindingPolicy::AdvisoryOnly,
+                FindingPolicy::VendorCommandOnly,
+                FindingPolicy::NeverClean,
+            ] {
+                assert!(
+                    !policy_label(lang, policy).trim().is_empty(),
+                    "{lang:?} missing {policy:?} policy label"
                 );
             }
         }

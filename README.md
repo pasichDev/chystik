@@ -34,6 +34,10 @@ what you choose to the desktop trash, never straight to `unlink`.
 - **Rates by cost of loss.** *Safe* regenerates on its own. *Moderate* costs a
   re-download or a rebuild. *Risky* cannot be recreated automatically and is
   never included in a bulk selection.
+- **Shows its authority.** Catalog-backed findings state the exact rule,
+  recovery cost, and upstream source. *Direct safe* may join a safe bulk
+  cleanup; *review-only* stays a manual decision; vendor and system-managed
+  storage is presented with its owning command or UI, never raw-deleted.
 - **Refuses to do damage.** Every path passes through a guard before deletion:
   system directories, `.git`, `.ssh`, `.gnupg` and your settings are rejected
   outright, symlinks and Windows reparse points are never followed, and the
@@ -170,7 +174,8 @@ native CI evidence and a Windows 10 desktop acceptance run.
    with **Targets → Add folder**.
 2. Press **Scan**. Results stream in as they are found.
 3. Work through the categories in the left rail, largest first.
-4. **Select all safe** ticks everything non-risky in the current category.
+4. **Select all safe** ticks only exact, `DirectSafe` cache rules in the
+   current category. Review-only items require a deliberate row selection.
 5. **Move to Trash** shows a full manifest — every path, its size, its rating,
    and a tick showing whether the safety guard will accept it. Read it.
 
@@ -197,6 +202,7 @@ This is a tool that deletes things, so the safety model is the product.
 |---|---|
 | Rules | Only match paths a rule explicitly recognises. There is no "delete anything over N GB". |
 | Severity | Every match carries the cost of losing it; Risky is excluded from bulk selection. |
+| Policy & evidence | Catalog rules record whether Chystik may clean the exact path, its recovery cost, and a vendor/upstream source. `clean --safe` and **Select all safe** accept only `DirectSafe` findings. |
 | Size floor | Findings under 1 MiB are dropped, so the signal is not buried in noise. |
 | Guard | `chystik_core::guard::check` runs before every deletion and refuses platform-protected roots, protected names, symlinks and anything outside the scan root. |
 | Manifest | Nothing is deleted until you have seen the full list with per-item guard verdicts. |

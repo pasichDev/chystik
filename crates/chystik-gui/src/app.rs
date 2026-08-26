@@ -937,6 +937,7 @@ mod tests {
             mount: None,
             note: "test".into(),
             advice: None,
+            provenance: None,
         }
     }
 

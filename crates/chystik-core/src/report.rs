@@ -132,6 +132,7 @@ mod tests {
             mount: None,
             note: String::new(),
             advice: None,
+            provenance: None,
         }
     }
 

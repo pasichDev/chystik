@@ -301,6 +301,7 @@ fn scan_root(
                         mount: crate::platform::mount_of(&path, &mounts),
                         note: rule.note.to_owned(),
                         advice: None,
+                        provenance: None,
                     };
                     walker_emit(ScanStreamEvent::FindingFound(finding));
                 }
@@ -327,7 +328,9 @@ fn scan_root(
                 if n.is_multiple_of(1000) {
                     walker_emit(ScanStreamEvent::DirectoriesScanned { count: n });
                 }
-                if let Some(m) = rules::classify(&path) {
+                if let Some(classified) = rules::classify_with_metadata(&path) {
+                    let m = classified.matched;
+                    let catalog = classified.catalog;
                     let (size_bytes, last_used) = dir_stats(&path, &walker_cancel, host);
                     // Prune regardless of the size floor: a matched subtree
                     // is claimed whether or not it is worth reporting.
@@ -343,7 +346,10 @@ fn scan_root(
                         last_used,
                         mount: crate::platform::mount_of(&path, &mounts),
                         note: m.note,
-                        advice: None,
+                        advice: catalog
+                            .as_ref()
+                            .and_then(|metadata| metadata.advice.clone()),
+                        provenance: catalog.map(|metadata| metadata.provenance),
                     };
                     walker_emit(ScanStreamEvent::FindingFound(finding));
                 }
@@ -642,6 +648,41 @@ mod tests {
             !findings.iter().any(|f| f.path == versions),
             "the store directory itself must never be a finding"
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn catalog_findings_carry_provenance_and_policy_into_scan_output() {
+        let _env = crate::rules::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let home = tempfile::tempdir().unwrap();
+        let cache = home.path().join("cache");
+        let pip = cache.join("pip");
+        std::fs::create_dir_all(&pip).unwrap();
+        std::fs::write(pip.join("wheel.whl"), vec![0u8; 4096]).unwrap();
+        std::env::set_var("CHYSTIK_TEST_HOME", home.path());
+        std::env::set_var("XDG_CACHE_HOME", &cache);
+
+        let (tx, _rx) = mpsc::channel();
+        let findings = scan(
+            home.path(),
+            &test_options(),
+            tx,
+            &Arc::new(AtomicBool::new(false)),
+        )
+        .expect("scan catalog fixture");
+
+        std::env::remove_var("XDG_CACHE_HOME");
+        std::env::remove_var("CHYSTIK_TEST_HOME");
+        let finding = findings
+            .iter()
+            .find(|finding| finding.path == pip)
+            .expect("pip cache finding");
+        let provenance = finding.provenance.as_ref().expect("catalog provenance");
+        assert_eq!(provenance.rule_id, "python.pip.cache");
+        assert_eq!(provenance.policy, crate::model::FindingPolicy::DirectSafe);
+        assert!(finding.advice.is_none());
     }
 
     /// Set an entry's mtime without pulling in a crate for it.

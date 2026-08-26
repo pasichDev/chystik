@@ -251,6 +251,7 @@ impl ScanView {
             mount: None,
             note: "fixture".into(),
             advice: None,
+            provenance: None,
         };
         Self {
             root: Some("/home/demo".into()),

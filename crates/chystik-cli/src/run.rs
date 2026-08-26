@@ -714,6 +714,12 @@ fn write_human_scan(result: &ScanResult, quiet: bool, verbose: bool) {
         );
         if verbose {
             println!("              {}", finding.note);
+            println!("              policy: {}", finding.policy().as_str());
+            if let Some(provenance) = &finding.provenance {
+                println!("              rule: {}", provenance.rule_id);
+                println!("              recovery: {}", provenance.recovery_cost);
+                println!("              source: {}", provenance.source_url);
+            }
             if let Some(advice) = &finding.advice {
                 println!("              advice: {advice}");
             }

@@ -15,7 +15,7 @@ use chystik_core::app::{
 };
 use chystik_core::cleaner::Remover;
 use chystik_core::config::{ConfigStore, UserConfig};
-use chystik_core::model::{Category, Finding, Severity};
+use chystik_core::model::{Category, Finding, FindingPolicy, RuleProvenance, Severity};
 
 #[derive(Default)]
 struct RecordingRemover {
@@ -39,6 +39,7 @@ fn finding(path: impl AsRef<Path>, severity: Severity, size_bytes: u64) -> Findi
         mount: None,
         note: "fixture".into(),
         advice: None,
+        provenance: None,
     }
 }
 
@@ -80,25 +81,34 @@ fn filters_and_sorts_without_changing_the_input() {
 }
 
 #[test]
-fn safe_cleanup_plan_never_selects_excluded_advisory_or_risky_findings() {
+fn safe_cleanup_plan_never_selects_excluded_advisory_risky_or_review_findings() {
     let sandbox = tempfile::tempdir().unwrap();
     let root = sandbox.path().join("scan");
     let safe = root.join("safe/node_modules");
     let excluded = root.join("excluded/node_modules");
     let risky = root.join("risky/node_modules");
     let advisory = root.join("advisory");
-    for path in [&safe, &excluded, &risky, &advisory] {
+    let review = root.join("review");
+    for path in [&safe, &excluded, &risky, &advisory, &review] {
         std::fs::create_dir_all(path).unwrap();
     }
 
     let mut advisory_finding = finding(&advisory, Severity::Safe, 400);
     advisory_finding.advice = Some("run package-manager cleanup".into());
+    let mut review_finding = finding(&review, Severity::Safe, 500);
+    review_finding.provenance = Some(RuleProvenance {
+        rule_id: "fixture.review-only".into(),
+        source_url: "https://example.test/review".into(),
+        policy: FindingPolicy::DirectReview,
+        recovery_cost: "manual review required".into(),
+    });
     let scan = ScanResult::from_findings(
         vec![
             finding(&safe, Severity::Safe, 100),
             finding(&excluded, Severity::Safe, 200),
             finding(&risky, Severity::Risky, 300),
             advisory_finding,
+            review_finding,
         ],
         vec![root.clone()],
     );
@@ -119,6 +129,10 @@ fn safe_cleanup_plan_never_selects_excluded_advisory_or_risky_findings() {
         .skipped
         .iter()
         .any(|item| { item.finding.path == advisory && item.reason == PlanSkipReason::Advisory }));
+    assert!(plan
+        .skipped
+        .iter()
+        .any(|item| { item.finding.path == review && item.reason == PlanSkipReason::NotSafe }));
 }
 
 #[test]
