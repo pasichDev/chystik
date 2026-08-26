@@ -35,6 +35,19 @@ impl Adapter for Linux {
         }
     }
 
+    fn rule_roots(&self) -> super::RuleRoots {
+        let home_dir = super::privacy_home_dir_or_current();
+        let cache_dir = env_absolute("XDG_CACHE_HOME").unwrap_or_else(|| home_dir.join(".cache"));
+        super::RuleRoots {
+            home_dir,
+            cache_dir,
+            local_app_data_dir: None,
+            library_caches_dir: None,
+            developer_dir: None,
+            volume_root: None,
+        }
+    }
+
     fn storage_volumes(&self) -> Vec<StorageVolume> {
         mount_table()
     }

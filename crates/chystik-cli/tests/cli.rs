@@ -152,6 +152,96 @@ fn scan_safe_is_read_only_and_never_starts_a_gui_or_optional_classifier() {
     assert!(document["findings"].as_array().unwrap().is_empty());
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn catalog_finding_exposes_policy_and_evidence_in_json_and_verbose_output() {
+    let fixture = tempfile::tempdir().unwrap();
+    let home = fixture.path().join("home");
+    let cache = home.join("cache/pip");
+    std::fs::create_dir_all(&cache).unwrap();
+    std::fs::write(cache.join("fixture.whl"), "x".repeat(2048)).unwrap();
+
+    let mut json = chystik();
+    json.args([
+        "scan",
+        home.to_str().unwrap(),
+        "--format",
+        "json",
+        "--min-size",
+        "0",
+    ]);
+    isolated(&mut json, &home);
+    json.env("XDG_CACHE_HOME", home.join("cache"));
+    let output = json.output().unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let pip = document["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|finding| finding["provenance"]["rule_id"] == "python.pip.cache")
+        .expect("pip cache must carry catalog provenance");
+    assert_eq!(pip["provenance"]["policy"], "direct_safe");
+    assert!(pip["provenance"]["source_url"]
+        .as_str()
+        .unwrap()
+        .contains("pip.pypa.io"));
+    assert!(pip["provenance"]["recovery_cost"].as_str().is_some());
+
+    let mut human = chystik();
+    human.args([
+        "scan",
+        home.to_str().unwrap(),
+        "--safe",
+        "--no-tui",
+        "--verbose",
+        "--min-size",
+        "0",
+    ]);
+    isolated(&mut human, &home);
+    human.env("XDG_CACHE_HOME", home.join("cache"));
+    let output = human.output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("policy: direct_safe"));
+    assert!(stdout.contains("rule: python.pip.cache"));
+    assert!(stdout.contains("recovery:"));
+    assert!(stdout.contains("source: https://pip.pypa.io/"));
+
+    let mut preview = chystik();
+    preview.args([
+        "clean",
+        home.to_str().unwrap(),
+        "--safe",
+        "--dry-run",
+        "--format",
+        "json",
+        "--min-size",
+        "0",
+    ]);
+    isolated(&mut preview, &home);
+    preview.env("XDG_CACHE_HOME", home.join("cache"));
+    let output = preview.output().unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let document: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(document["plan"]["eligible"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| {
+            item["finding"]["provenance"]["rule_id"] == "python.pip.cache"
+                && item["finding"]["provenance"]["policy"] == "direct_safe"
+        }));
+}
+
 #[test]
 fn human_scan_announces_that_work_started_before_printing_the_final_report() {
     let fixture = tempfile::tempdir().unwrap();

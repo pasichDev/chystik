@@ -35,6 +35,11 @@ same JSON/JSONL schemas and is intended for automation. Successful machine
 payloads go only to stdout; diagnostics and versioned machine errors go only
 to stderr. No ANSI sequences are emitted in either machine format.
 
+Use `--verbose --no-tui` for the human evidence record: catalog-backed
+findings print their policy, stable rule ID, recovery cost, and upstream
+source URL. Those same fields appear under optional `finding.provenance` in
+JSON and JSONL. Legacy findings omit `provenance` rather than invent evidence.
+
 In an interactive terminal, human `scan` opens a proper alternate-screen TUI:
 an animated loader, live counters, a colour-coded `SIZE / SEVERITY / CATEGORY / PATH`
 table, and keyboard navigation. `q`, Escape, or Ctrl-C cancels an
@@ -78,8 +83,9 @@ chystik clean ~/work --safe --interactive
 chystik clean ~/work --safe --yes
 ```
 
-- `--safe` is required. Only `safe` findings can enter the plan; moderate and
-  risky findings are listed as skipped and can never join a bulk cleanup.
+- `--safe` is required. A finding enters the plan only when it is both `safe`
+  and policy `direct_safe`; review-only, advisory, vendor-command, moderate,
+  and risky findings are listed as skipped and can never join a bulk cleanup.
 - The default is a manifest followed by a terminal confirmation. A pipe or
   redirected stdin is cancelled rather than guessed.
 - `--dry-run` renders a manifest and never calls the remover.

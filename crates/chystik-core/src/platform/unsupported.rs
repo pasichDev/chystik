@@ -33,6 +33,18 @@ impl Adapter for Unsupported {
         }
     }
 
+    fn rule_roots(&self) -> super::RuleRoots {
+        let home_dir = super::privacy_home_dir_or_current();
+        super::RuleRoots {
+            cache_dir: home_dir.join(".cache"),
+            home_dir,
+            local_app_data_dir: None,
+            library_caches_dir: None,
+            developer_dir: None,
+            volume_root: None,
+        }
+    }
+
     fn storage_volumes(&self) -> Vec<StorageVolume> {
         Vec::new()
     }

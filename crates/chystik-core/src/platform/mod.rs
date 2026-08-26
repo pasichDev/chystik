@@ -70,6 +70,22 @@ pub(crate) struct PrivacyRoots {
     pub local_dir: Option<PathBuf>,
 }
 
+/// Typed user and platform bases available to the rules catalog.
+///
+/// The catalog receives this one value instead of querying environment
+/// variables itself. That makes redirected Windows profiles and XDG overrides
+/// a host-adapter concern, keeps the rules deterministic, and gives tests a
+/// small context seam without pretending Linux paths are Windows paths.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuleRoots {
+    pub home_dir: PathBuf,
+    pub cache_dir: PathBuf,
+    pub local_app_data_dir: Option<PathBuf>,
+    pub library_caches_dir: Option<PathBuf>,
+    pub developer_dir: Option<PathBuf>,
+    pub volume_root: Option<PathBuf>,
+}
+
 /// An opaque stable identity for an object already approved by the guard.
 ///
 /// Each adapter uses the host's native file identity where it has one. The
@@ -107,6 +123,7 @@ trait Adapter: Send + Sync {
     fn kind(&self) -> PlatformKind;
     fn app_paths(&self) -> AppPaths;
     fn privacy_roots(&self) -> PrivacyRoots;
+    fn rule_roots(&self) -> RuleRoots;
     fn storage_volumes(&self) -> Vec<StorageVolume>;
     fn unscannable_roots(&self) -> Vec<PathBuf>;
     fn default_skip_roots(&self) -> Vec<PathBuf>;
@@ -141,6 +158,11 @@ impl Platform {
 
     pub(crate) fn privacy_roots(self) -> PrivacyRoots {
         self.adapter.privacy_roots()
+    }
+
+    /// Platform-owned roots used by the declarative cleanup catalog.
+    pub(crate) fn rule_roots(self) -> RuleRoots {
+        self.adapter.rule_roots()
     }
 
     pub fn storage_volumes(self) -> Vec<StorageVolume> {

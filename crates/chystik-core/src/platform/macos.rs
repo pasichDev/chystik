@@ -34,6 +34,18 @@ impl Adapter for MacOS {
         }
     }
 
+    fn rule_roots(&self) -> super::RuleRoots {
+        let home_dir = super::privacy_home_dir_or_current();
+        super::RuleRoots {
+            cache_dir: home_dir.join("Library/Caches"),
+            library_caches_dir: Some(home_dir.join("Library/Caches")),
+            developer_dir: Some(home_dir.join("Library/Developer")),
+            home_dir,
+            local_app_data_dir: None,
+            volume_root: None,
+        }
+    }
+
     fn storage_volumes(&self) -> Vec<StorageVolume> {
         let mut roots = vec![PathBuf::from("/")];
         if let Ok(entries) = std::fs::read_dir("/Volumes") {

@@ -4,8 +4,15 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-26
+
 ### Added
 
+- Evidence-backed cross-platform catalog for pip, CocoaPods, ccache, sccache,
+  vcpkg archives, NVIDIA OptiX, Windows driver installer staging, and Xcode
+  caches. Findings now carry policy, recovery cost, and upstream source in
+  JSON/JSONL and verbose CLI/GUI detail views; vendor-managed caches stay
+  advisory-only.
 - `chystik` CLI with read-only scan/report/explain commands, versioned JSON and
   streaming JSONL, shell completions, generated manual, and documented exit
   codes.

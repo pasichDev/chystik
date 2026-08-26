@@ -1,6 +1,6 @@
 # Maintainer note: replace SKIP with the release tarball SHA-256 before AUR publishing.
 pkgname=chystik
-pkgver=0.1.0
+pkgver=0.2.0
 pkgrel=1
 pkgdesc='Safety-first developer disk cleanup GUI and CLI'
 arch=('x86_64')

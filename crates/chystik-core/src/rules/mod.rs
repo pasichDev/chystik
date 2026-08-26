@@ -5,6 +5,7 @@
 pub(crate) mod ai_agents;
 pub(crate) mod android;
 pub(crate) mod browsers;
+pub(crate) mod catalog;
 pub(crate) mod cloud;
 pub(crate) mod comms;
 pub(crate) mod containers;
@@ -26,6 +27,14 @@ pub(crate) struct Match {
     pub category: Category,
     pub severity: Severity,
     pub note: String,
+}
+
+/// The result of resolving a rule. Legacy table rules have no provenance;
+/// catalog rules carry their policy and source from the same lookup.
+#[derive(Debug, Clone)]
+pub(crate) struct ClassifiedRule {
+    pub matched: Match,
+    pub catalog: Option<catalog::CatalogMetadata>,
 }
 
 /// A rule that judges a whole directory's CHILDREN together rather than one
@@ -203,8 +212,14 @@ pub(crate) fn parent_has_py(parent: &Path) -> bool {
 /// application's cache — a Flatpak Steam or Telegram cache could never be
 /// routed to `games` or `comms`. It now runs after them, so a domain
 /// module can own its own app id and the wildcard only catches the rest.
-pub(crate) fn classify(dir: &Path) -> Option<Match> {
-    core::classify(dir)
+pub(crate) fn classify_with_metadata(dir: &Path) -> Option<ClassifiedRule> {
+    if let Some((matched, catalog)) = catalog::classify_with_metadata(dir) {
+        return Some(ClassifiedRule {
+            matched,
+            catalog: Some(catalog),
+        });
+    }
+    let matched = core::classify(dir)
         .or_else(|| android::classify(dir))
         .or_else(|| ai_agents::classify(dir))
         .or_else(|| languages::classify(dir))
@@ -216,7 +231,17 @@ pub(crate) fn classify(dir: &Path) -> Option<Match> {
         .or_else(|| cloud::classify(dir))
         .or_else(|| office_docs::classify(dir))
         .or_else(|| containers::classify(dir))
-        .or_else(|| system_junk::classify(dir))
+        .or_else(|| system_junk::classify(dir))?;
+    Some(ClassifiedRule {
+        matched,
+        catalog: None,
+    })
+}
+
+/// Evaluate all registered rule sets and return the original lightweight
+/// match for callers that do not need catalog provenance.
+pub(crate) fn classify(dir: &Path) -> Option<Match> {
+    classify_with_metadata(dir).map(|classified| classified.matched)
 }
 
 #[cfg(test)]
