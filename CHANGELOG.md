@@ -4,6 +4,23 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-26
+
+### Added
+
+- Catalog-backed findings now include their review date and explicit path or
+  ownership conditions in JSON/JSONL and verbose CLI/GUI evidence views.
+
+### Changed
+
+- Resolve catalog roots, environment overrides, and exact targets once per
+  scan; the scanner now reuses that immutable rule engine for every candidate.
+- The GUI consumes the shared streaming scan event contract directly and no
+  longer maintains a duplicate final findings buffer.
+- Catalog tests now enforce unique rule IDs, HTTPS sources, review dates,
+  declared conditions, exact platform fixtures, and precedence over legacy
+  rules. Removed obsolete implementation-era ownership markers.
+
 ## [0.2.0] - 2026-08-26
 
 ### Added
