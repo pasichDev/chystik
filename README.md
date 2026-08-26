@@ -13,6 +13,8 @@
 
 **[pasichdev.github.io/chystik](https://pasichdev.github.io/chystik/)**
 
+**[Download the latest release](https://github.com/pasichDev/chystik/releases/latest)** · **[Read the safety model](#safety-model)**
+
 </div>
 
 ---
@@ -118,6 +120,14 @@ Tagged releases publish x86_64 artifacts on GitHub Releases. Choose the format
 for your distribution; all three contain the GUI, `chystik` CLI, generated
 manual/completions where the format supports them, and the same trash-only
 cleanup contract.
+
+Every release asset is listed in `SHA256SUMS`. Releases tagged after the
+provenance workflow is enabled also publish GitHub build provenance; after
+downloading an attested asset, verify it with:
+
+```bash
+gh attestation verify ./Chystik-<version>-x86_64.AppImage -R pasichDev/chystik
+```
 
 Generic Linux desktops with a GTK-compatible X11 or Wayland session can use
 the AppImage:

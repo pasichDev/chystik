@@ -1,0 +1,19 @@
+pkgbase = chystik
+	pkgdesc = Safety-first developer disk cleanup GUI and CLI
+	pkgver = 0.2.1
+	pkgrel = 1
+	url = https://github.com/pasichDev/chystik
+	arch = x86_64
+	license = MIT
+	makedepends = cargo
+	makedepends = pkgconf
+	makedepends = gtk3
+	depends = gtk3
+	depends = libxkbcommon
+	depends = libxkbcommon-x11
+	depends = libx11
+	depends = mesa
+	source = https://github.com/pasichDev/chystik/archive/refs/tags/v0.2.1.tar.gz
+	sha256sums = 9d0ba9c890f03c56b164b7e37cf0960b068d9b6cf38c40ce61936945c18d15e9
+
+pkgname = chystik

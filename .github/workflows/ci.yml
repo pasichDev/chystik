@@ -74,6 +74,9 @@ jobs:
         run: |
           bash packaging/linux/tests/version-contract.sh
           bash packaging/linux/tests/release-notes.sh
+          bash packaging/linux/tests/release-attestations.sh
+          bash packaging/linux/tests/arch-aur.sh
+          bash site/tests/launch-page.sh
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
@@ -201,7 +204,10 @@ jobs:
             "${{ matrix.image }}" \
             /bin/bash -ceu '${{ matrix.setup }}
               cargo build --release --locked --package chystik-gui --package chystik-cli
-              ${{ matrix.runtime_check }}'
+              ${{ matrix.runtime_check }}
+              if [[ "${{ matrix.name }}" == "Arch" ]]; then
+                bash packaging/linux/tests/arch-aur.sh
+              fi'
 
   icon:
     name: icon assets are in sync

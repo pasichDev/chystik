@@ -6,6 +6,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -174,6 +176,16 @@ jobs:
           }
           (cd "$dist" && sha256sum -- *.AppImage *.deb *.rpm *-windows-x86_64.zip *-windows-aarch64.zip > SHA256SUMS)
           (cd "$dist" && sha256sum -c SHA256SUMS)
+
+      - name: Attest release assets
+        uses: actions/attest@v4
+        with:
+          subject-path: |
+            ${{ runner.temp }}/chystik-release/*.AppImage
+            ${{ runner.temp }}/chystik-release/*.deb
+            ${{ runner.temp }}/chystik-release/*.rpm
+            ${{ runner.temp }}/chystik-release/*-windows-x86_64.zip
+            ${{ runner.temp }}/chystik-release/*-windows-aarch64.zip
 
       - name: Publish release assets
         env:

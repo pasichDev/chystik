@@ -1,4 +1,4 @@
-# Maintainer note: replace SKIP with the release tarball SHA-256 before AUR publishing.
+# The tag archive is pinned so this file can be copied to the AUR unchanged.
 pkgname=chystik
 pkgver=0.2.1
 pkgrel=1
@@ -9,7 +9,7 @@ license=('MIT')
 depends=('gtk3' 'libxkbcommon' 'libxkbcommon-x11' 'libx11' 'mesa')
 makedepends=('cargo' 'pkgconf' 'gtk3')
 source=("https://github.com/pasichDev/chystik/archive/refs/tags/v${pkgver}.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('9d0ba9c890f03c56b164b7e37cf0960b068d9b6cf38c40ce61936945c18d15e9')
 
 build() {
     cd "${srcdir}/${pkgname}-${pkgver}"

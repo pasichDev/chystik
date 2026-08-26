@@ -92,7 +92,7 @@ paths from one staging tree:
 | Generic Linux desktop | `Chystik-<version>-x86_64.AppImage` | Bundled with pinned linuxdeploy + GTK plugin; the staged tree also contains the CLI. |
 | Debian / Ubuntu | `chystik_<version>_amd64.deb` | `dpkg-deb` metadata, extraction, GUI launch smoke, `chystik`, generated man page, and completion files. |
 | Fedora / RHEL compatible | `chystik-<version>-1.x86_64.rpm` | `rpmbuild` metadata, extraction, GUI launch smoke, `chystik`, generated man page, and completion files. |
-| Arch | `packaging/arch/PKGBUILD` source recipe | Arch container compiles both frontends; AUR publication requires a maintainer and a release-tarball checksum. |
+| Arch | `packaging/arch/PKGBUILD` + `.SRCINFO` source recipe | Arch container compiles both frontends and verifies generated source metadata. AUR publication still requires a maintainer account and SSH key. |
 
 Ubuntu, Fedora, and Arch CI checks compile the GUI against their GTK/runtime
 dependencies and compile the CLI from the same workspace. This is deliberately
@@ -115,12 +115,14 @@ must already be on `main`, and `CHANGELOG.md` must contain the matching dated
 section `## [0.1.0] - YYYY-MM-DD`; that section becomes the GitHub Release
 body. The workflow validates every artifact before creating a release with the
 AppImage, its SHA-256 sidecar, the `.deb`, the `.rpm`, Windows x64 and ARM64
-portable ZIPs, and a `SHA256SUMS` manifest for all distributable files. Manual
-workflow runs upload review artifacts only; they do not publish a release.
+portable ZIPs, and a `SHA256SUMS` manifest for all distributable files. The
+workflow also creates GitHub build-provenance attestations for the five shipped
+assets before it publishes a release. Manual workflow runs upload review
+artifacts only; they do not publish a release.
 
 If an artifact is wrong, remove that release asset and its checksum reference,
 mark the release as a bad build, fix the source, then publish a new tag. The
 workflow never overwrites an existing asset silently. Never advise users to
-delete files outside their desktop trash as part of recovery. Arch maintainers
-must replace the PKGBUILD `SKIP` checksum with the published tag archive
-checksum before AUR publication.
+delete files outside their desktop trash as part of recovery. The checked-in
+Arch recipe pins the current tag source and includes generated `.SRCINFO`; its
+handoff procedure lives in `packaging/arch/README.md`.

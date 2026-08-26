@@ -42,6 +42,9 @@
   .masthead h1{font-size:42px;margin:14px 0 6px;letter-spacing:.02em;font-weight:600}
   .masthead .sub{font-family:var(--sans);font-size:15px;color:var(--ink-2);letter-spacing:.02em;margin:0}
   .masthead .meta{font-family:var(--mono);font-size:12px;color:var(--ink-2);letter-spacing:.1em;text-transform:uppercase;margin-top:18px}
+  .masthead .actions{display:flex;justify-content:center;gap:10px;flex-wrap:wrap;margin-top:20px;font-family:var(--sans);font-size:14px}
+  .masthead .actions a{border:1px solid var(--rule-2);padding:7px 11px;text-decoration:none}
+  .masthead .actions a:first-child{background:var(--accent);border-color:var(--accent);color:var(--paper);font-weight:600}
 
   /* abstract */
   .abstract{padding:34px 0;border-bottom:1px solid var(--rule)}
@@ -105,7 +108,11 @@
     <img src="assets/icon.png" alt="">
     <h1>Chystik</h1>
     <p class="sub">A safety-first disk-cleanup tool that knows what a directory <em>is</em>.</p>
-    <div class="meta">Version 0.1.0 · MIT · Written in Rust</div>
+    <div class="meta">Latest stable release · MIT · Written in Rust</div>
+    <div class="actions">
+      <a href="https://github.com/pasichDev/chystik/releases/latest">Download latest release</a>
+      <a href="#s3">Read the safety model</a>
+    </div>
   </div>
 
   <div class="abstract">
@@ -254,13 +261,17 @@
   <section id="s7">
     <h2><span class="n">7</span> Installation</h2>
     <h3>Linux release artifacts (x86_64)</h3>
-<pre>chmod +x Chystik-0.1.0-x86_64.AppImage &amp;&amp; ./Chystik-0.1.0-x86_64.AppImage
-sudo apt install ./chystik_0.1.0_amd64.deb
-sudo dnf install ./chystik-0.1.0-1.x86_64.rpm
+<pre>chmod +x Chystik-&lt;version&gt;-x86_64.AppImage &amp;&amp; ./Chystik-&lt;version&gt;-x86_64.AppImage
+sudo apt install ./chystik_&lt;version&gt;_amd64.deb
+sudo dnf install ./chystik-&lt;version&gt;-1.x86_64.rpm
 cd packaging/arch &amp;&amp; makepkg -si</pre>
     <h3>Windows portable ZIP</h3>
-<pre>Expand-Archive .\Chystik-0.1.0-windows-x86_64.zip -DestinationPath .\Chystik
+<pre>Expand-Archive .\Chystik-&lt;version&gt;-windows-x86_64.zip -DestinationPath .\Chystik
 .\Chystik\Chystik-GUI.exe</pre>
+    <h3>Verify what you downloaded</h3>
+    <p>Every release includes <code>SHA256SUMS</code>. Releases tagged after the provenance workflow
+       is enabled also receive GitHub build provenance, which you can check after download:</p>
+<pre><b>gh</b> attestation verify ./Chystik-&lt;version&gt;-x86_64.AppImage -R pasichDev/chystik</pre>
     <h3>From source — Rust 1.80 or newer</h3>
 <pre>git clone https://github.com/pasichDev/chystik
 cd chystik &amp;&amp; cargo build --release
@@ -281,6 +292,7 @@ cd chystik &amp;&amp; cargo build --release
 
   <footer>
     <a href="https://github.com/pasichDev/chystik">GitHub</a>·
+    <a href="https://github.com/pasichDev/chystik/releases/latest">Download</a>·
     <a href="https://github.com/pasichDev/chystik/blob/main/docs/CLI.md">CLI</a>·
     <a href="https://github.com/pasichDev/chystik/blob/main/docs/SUPPORT.md">Support</a>·
     <a href="https://github.com/pasichDev/chystik/blob/main/CONTRIBUTING.md">Contributing</a>·
