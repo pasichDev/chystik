@@ -15,6 +15,33 @@ use std::sync::atomic::Ordering;
 use crate::state::*;
 use crate::theme::*;
 use crate::widgets::*;
+use std::time::{Duration, Instant};
+
+const TABLE_SELECT_WIDTH: f32 = space(8.0);
+const TABLE_SIZE_WIDTH: f32 = 94.0;
+const TABLE_RECOVERY_WIDTH: f32 = 84.0;
+const TABLE_AGE_WIDTH: f32 = 84.0;
+const TABLE_COLUMN_COUNT: f32 = 5.0;
+const ADVICE_COPY_FEEDBACK: Duration = Duration::from_secs(2);
+
+/// The path column must not derive its width from its contents. `TableBuilder`
+/// persists the measured width of a non-final remainder column, so a long path
+/// scrolling into view would otherwise move the fixed columns to the right.
+fn table_path_column_width(available_width: f32, scroll_bar_width: f32, gap: f32) -> f32 {
+    let fixed_width =
+        TABLE_SELECT_WIDTH + TABLE_SIZE_WIDTH + TABLE_RECOVERY_WIDTH + TABLE_AGE_WIDTH;
+    let gaps = gap * (TABLE_COLUMN_COUNT - 1.0);
+
+    (available_width - scroll_bar_width - fixed_width - gaps).max(0.0)
+}
+
+fn advice_copy_feedback_is_active(
+    copied_advice: Option<(usize, Instant)>,
+    row: usize,
+    now: Instant,
+) -> bool {
+    copied_advice.is_some_and(|(copied_row, until)| copied_row == row && now < until)
+}
 
 impl ChystikApp {
     pub(crate) fn command_bar_ui(&mut self, ui: &mut egui::Ui) {
@@ -505,7 +532,12 @@ impl ChystikApp {
         let mut row_toggles: Vec<(usize, bool)> = Vec::new();
         let mut sort_click: Option<(SortCol, bool)> = None;
         let mut exclude_request: Option<std::path::PathBuf> = None;
-        let mut copied = false;
+        let now = Instant::now();
+        if self.copied_advice.is_some_and(|(_, until)| now >= until) {
+            self.copied_advice = None;
+        }
+        let copied_advice = self.copied_advice;
+        let mut copied_advice_request = None;
 
         if rows.is_empty() {
             ui.add_space(space(14.0));
@@ -534,6 +566,11 @@ impl ChystikApp {
         egui::Frame::none()
             .inner_margin(egui::Margin::symmetric(space(4.0), 0.0))
             .show(ui, |ui| {
+                let path_width = table_path_column_width(
+                    ui.available_width(),
+                    ui.spacing().scroll.allocated_width(),
+                    ui.spacing().item_spacing.x,
+                );
                 egui_extras::TableBuilder::new(ui)
                     .striped(false)
                     // Cells sense `hover` by default, which made every
@@ -541,12 +578,18 @@ impl ChystikApp {
                     // sort arrows moved but nothing ever sorted.
                     .sense(egui::Sense::click())
                     .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                    .column(Column::exact(space(8.0)))
-                    .column(Column::remainder().at_least(220.0))
-                    .column(Column::exact(94.0))
-                    .column(Column::exact(84.0))
-                    .column(Column::exact(84.0))
+                    .column(Column::exact(TABLE_SELECT_WIDTH))
+                    // Exact, content-independent width prevents egui_extras
+                    // from persisting a long visible path as this column's
+                    // width. The fixed fields can therefore never shift.
+                    .column(Column::exact(path_width))
+                    .column(Column::exact(TABLE_SIZE_WIDTH))
+                    .column(Column::exact(TABLE_RECOVERY_WIDTH))
+                    .column(Column::exact(TABLE_AGE_WIDTH))
                     .vscroll(true)
+                    // Keep wheel and drag scrolling but never insert a
+                    // scrollbar track that changes the table's visual edge.
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
                     .auto_shrink([false, false])
                     .min_scrolled_height(120.0)
                     .max_scroll_height(f32::INFINITY)
@@ -637,7 +680,7 @@ impl ChystikApp {
                                 // identifies the item.
                                 let (head, tail) = split_path_tail(&full);
                                 ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
-                                ui.vertical(|ui| {
+                                let row_response = ui.vertical(|ui| {
                                     ui.add_space(space(1.0));
                                     ui.horizontal(|ui| {
                                         ui.spacing_mut().item_spacing.x = 0.0;
@@ -657,7 +700,13 @@ impl ChystikApp {
                                             egui::Label::new(txt(tail, "strong", COL_TEXT))
                                                 .truncate(),
                                         );
-                                    });
+                                    })
+                                    .response
+                                    // Keep the detailed finding tooltip on
+                                    // the path title only. Advisory commands
+                                    // own their copy tooltip, and two nested
+                                    // tooltips otherwise fight every frame.
+                                    .on_hover_text(finding_tooltip(lang, finding));
                                     ui.add_space(1.0);
                                     match finding.advice.as_deref() {
                                         // For advisory rows the command IS
@@ -674,15 +723,24 @@ impl ChystikApp {
                                                 .truncate()
                                                 .sense(egui::Sense::click()),
                                             );
+                                            let copy_hint = if advice_copy_feedback_is_active(
+                                                copied_advice,
+                                                idx,
+                                                now,
+                                            ) {
+                                                s.advice_copied.as_str()
+                                            } else {
+                                                s.advice_copy.as_str()
+                                            };
                                             if hit
                                                 .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                                .on_hover_text(s.advice_copy.as_str())
+                                                .on_hover_text(copy_hint)
                                                 .clicked()
                                             {
                                                 ui.output_mut(|o| {
                                                     o.copied_text = command.to_owned()
                                                 });
-                                                copied = true;
+                                                copied_advice_request = Some(idx);
                                             }
                                         }
                                         None => {
@@ -696,10 +754,8 @@ impl ChystikApp {
                                             );
                                         }
                                     }
-                                })
-                                .response
-                                .on_hover_text(finding_tooltip(lang, finding))
-                                .context_menu(|ui| {
+                                });
+                                row_response.response.context_menu(|ui| {
                                     if ui.button(s.exclusions_add.as_str()).clicked() {
                                         exclude_request = Some(finding.path.clone());
                                         ui.close_menu();
@@ -722,8 +778,8 @@ impl ChystikApp {
 
                             row.col(|ui| {
                                 ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                                    ui.add_space((ROW_H - 19.0) / 2.0);
-                                    severity_pill(ui, finding.severity, lang);
+                                    ui.add_space((ROW_H - RECOVERY_DOT_SIZE) / 2.0);
+                                    recovery_dot(ui, finding.severity, lang);
                                 });
                             });
 
@@ -752,11 +808,12 @@ impl ChystikApp {
         if let Some(path) = exclude_request {
             self.exclude_path(path);
         }
-        if copied {
-            self.notice = Some(crate::app::Notice {
-                title: s.advice_copied.clone(),
-                lines: vec![s.advice_run.clone()],
-            });
+        if let Some(row) = copied_advice_request {
+            self.copied_advice = Some((row, Instant::now() + ADVICE_COPY_FEEDBACK));
+        }
+        if let Some((_, until)) = self.copied_advice {
+            ui.ctx()
+                .request_repaint_after(until.saturating_duration_since(now));
         }
         for (idx, checked) in row_toggles {
             if checked {
@@ -1302,7 +1359,12 @@ mod tests {
 
     use chystik_core::model::{Category, Finding, FindingPolicy, RuleProvenance, Severity};
 
-    use super::{finding_tooltip, is_bulk_safe_finding};
+    use std::time::{Duration, Instant};
+
+    use super::{
+        advice_copy_feedback_is_active, finding_tooltip, is_bulk_safe_finding,
+        table_path_column_width,
+    };
 
     fn finding(severity: Severity, policy: Option<FindingPolicy>) -> Finding {
         Finding {
@@ -1354,5 +1416,27 @@ mod tests {
         );
         assert!(tooltip.contains("Last reviewed: 2026-08-26"));
         assert!(tooltip.contains("Conditions:\n• fixture precondition"));
+    }
+
+    #[test]
+    fn path_column_width_depends_only_on_available_table_space() {
+        let width = table_path_column_width(568.0, 10.0, 10.0);
+
+        // 568 available - 10 scrollbar - 294 fixed columns - 40 gaps.
+        assert_eq!(width, 224.0);
+    }
+
+    #[test]
+    fn copied_advice_feedback_is_scoped_to_its_row_and_deadline() {
+        let now = Instant::now();
+        let feedback = Some((7, now + Duration::from_secs(2)));
+
+        assert!(advice_copy_feedback_is_active(feedback, 7, now));
+        assert!(!advice_copy_feedback_is_active(feedback, 8, now));
+        assert!(!advice_copy_feedback_is_active(
+            feedback,
+            7,
+            now + Duration::from_secs(2)
+        ));
     }
 }

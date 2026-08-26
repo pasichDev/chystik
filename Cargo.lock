@@ -758,7 +758,7 @@ dependencies = [
 
 [[package]]
 name = "chystik-cli"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "chrono",
  "chystik-core",
@@ -774,7 +774,7 @@ dependencies = [
 
 [[package]]
 name = "chystik-core"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "chrono",
  "jwalk",
@@ -792,7 +792,7 @@ dependencies = [
 
 [[package]]
 name = "chystik-gui"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "chrono",
  "chystik-core",
