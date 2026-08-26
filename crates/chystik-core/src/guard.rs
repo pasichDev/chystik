@@ -197,7 +197,8 @@ fn has_symlinked_ancestor(candidate: &Path, scan_root: &Path) -> bool {
 /// `original` is only used to resolve the `.config` allowlist, which is
 /// expressed relative to `$HOME`.
 fn is_protected_location(path: &Path, original: &Path) -> bool {
-    if crate::platform::current().is_protected_system_path(path) {
+    let host = crate::platform::current();
+    if host.is_native_trash_path(path) || host.is_protected_system_path(path) {
         return true;
     }
     if !lexical_path_contains_protected_name(path) {
@@ -257,6 +258,19 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("protected"));
+    }
+
+    #[test]
+    fn native_trash_paths_are_protected_before_filesystem_lookup() {
+        let host = crate::platform::current();
+        for root in host.native_trash_roots() {
+            let candidate = root.join("files/chystik-guard-fixture");
+            assert!(
+                is_protected_location(&candidate, &candidate),
+                "native Trash must remain protected even for a missing path: {}",
+                candidate.display()
+            );
+        }
     }
 
     #[test]

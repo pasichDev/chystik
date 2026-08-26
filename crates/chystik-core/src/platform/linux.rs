@@ -63,6 +63,26 @@ impl Adapter for Linux {
             .collect()
     }
 
+    fn native_trash_roots(&self) -> Vec<PathBuf> {
+        // Freedesktop Trash specification: the home trash belongs below the
+        // user's XDG data directory. Mounted volumes use either `.Trash/$uid`
+        // or `.Trash-$uid`, depending on whether a shared `.Trash` directory
+        // is valid on that filesystem. Both forms are exact locations, not
+        // broad filename matches.
+        let home_dir = super::home_dir_or_current();
+        let data_dir =
+            env_absolute("XDG_DATA_HOME").unwrap_or_else(|| home_dir.join(".local/share"));
+        let uid = unsafe { libc::geteuid() };
+        let mut roots = vec![data_dir.join("Trash")];
+        for volume in mount_table() {
+            roots.push(volume.mount_point.join(".Trash").join(uid.to_string()));
+            roots.push(volume.mount_point.join(format!(".Trash-{uid}")));
+        }
+        roots.sort();
+        roots.dedup();
+        roots
+    }
+
     fn storage_stats(&self, path: &Path) -> Option<StorageStats> {
         let (total_bytes, free_bytes) = statvfs_bytes(path);
         (total_bytes > 0).then_some(StorageStats {

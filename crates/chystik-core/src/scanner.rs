@@ -218,6 +218,16 @@ fn scan_root(
     });
 
     let host = crate::platform::current();
+    let native_trash_roots = host.native_trash_roots();
+    let native_trash_case_insensitive =
+        matches!(host.kind(), crate::platform::PlatformKind::Windows);
+    // Normal default skips deliberately do not block an explicit root: a
+    // user may still inspect `/var` directly. Native Trash is different:
+    // scanning it can manufacture a finding that the cleaner would try to
+    // move into the same recovery store, so it is an unconditional stop.
+    if is_native_trash_path(root, &native_trash_roots, native_trash_case_insensitive) {
+        return Ok(());
+    }
     let walker_emit = emit.clone();
     let walker_dirs = dirs.clone();
     let walker_cancel = cancel.clone();
@@ -257,6 +267,19 @@ fn scan_root(
                 return;
             }
 
+            // Prune recovery stores before either group rules or regular
+            // rules can inspect them. Keeping this outside the mutable user
+            // skip list makes an explicit Trash scan harmless as well.
+            for entry in children.iter_mut().flatten() {
+                if is_native_trash_path(
+                    &entry.path(),
+                    &native_trash_roots,
+                    native_trash_case_insensitive,
+                ) {
+                    entry.read_children_path = None;
+                }
+            }
+
             // A group-ruled directory belongs to that rule entirely: its
             // children are ordered here, the newest few are spared, and the
             // rest are reported individually. Nothing below is descended
@@ -269,6 +292,13 @@ fn scan_root(
                 let mut candidates: Vec<(PathBuf, std::time::SystemTime, u64)> = children
                     .iter()
                     .flatten()
+                    .filter(|e| {
+                        !is_native_trash_path(
+                            &e.path(),
+                            &native_trash_roots,
+                            native_trash_case_insensitive,
+                        )
+                    })
                     .filter(|e| !host.is_link_or_reparse_point(&e.path()))
                     .filter_map(|e| {
                         let path = e.path();
@@ -290,7 +320,13 @@ fn scan_root(
                     if n.is_multiple_of(1000) {
                         walker_emit(ScanStreamEvent::DirectoriesScanned { count: n });
                     }
-                    let (size_bytes, last_used) = entry_stats(&path, &walker_cancel, host);
+                    let (size_bytes, last_used) = entry_stats(
+                        &path,
+                        &walker_cancel,
+                        host,
+                        &native_trash_roots,
+                        native_trash_case_insensitive,
+                    );
                     if size_bytes < min_bytes {
                         continue;
                     }
@@ -311,6 +347,14 @@ fn scan_root(
             }
 
             for entry in children.iter_mut().flatten() {
+                if is_native_trash_path(
+                    &entry.path(),
+                    &native_trash_roots,
+                    native_trash_case_insensitive,
+                ) {
+                    entry.read_children_path = None;
+                    continue;
+                }
                 if entry.depth == 0
                     || entry.file_type().is_symlink()
                     || host.is_link_or_reparse_point(&entry.path())
@@ -333,7 +377,13 @@ fn scan_root(
                 if let Some(classified) = walker_rules.classify_with_metadata(&path) {
                     let m = classified.matched;
                     let catalog = classified.catalog;
-                    let (size_bytes, last_used) = dir_stats(&path, &walker_cancel, host);
+                    let (size_bytes, last_used) = dir_stats(
+                        &path,
+                        &walker_cancel,
+                        host,
+                        &native_trash_roots,
+                        native_trash_case_insensitive,
+                    );
                     // Prune regardless of the size floor: a matched subtree
                     // is claimed whether or not it is worth reporting.
                     entry.read_children_path = None;
@@ -373,17 +423,34 @@ fn scan_root(
     Ok(())
 }
 
+/// Exact native Trash roots are safety boundaries, not ordinary user-facing
+/// exclusions. Keep component-aware matching for paths such as `Trash-old`;
+/// Windows uses its case-insensitive filesystem spelling.
+fn is_native_trash_path(path: &Path, roots: &[PathBuf], case_insensitive: bool) -> bool {
+    roots
+        .iter()
+        .any(|root| crate::platform::is_under(path, root, case_insensitive))
+}
+
 /// Size and mtime of one entry, whether it is a file or a whole subtree.
 fn entry_stats(
     path: &Path,
     cancel: &AtomicBool,
     host: crate::platform::Platform,
+    native_trash_roots: &[PathBuf],
+    native_trash_case_insensitive: bool,
 ) -> (u64, Option<DateTime<Utc>>) {
     let Ok(meta) = std::fs::symlink_metadata(path) else {
         return (0, None);
     };
     if meta.is_dir() {
-        return dir_stats(path, cancel, host);
+        return dir_stats(
+            path,
+            cancel,
+            host,
+            native_trash_roots,
+            native_trash_case_insensitive,
+        );
     }
     let last_used = meta.modified().ok().map(DateTime::<Utc>::from);
     (host.allocated_bytes(&meta), last_used)
@@ -395,6 +462,8 @@ fn dir_stats(
     dir: &Path,
     cancel: &AtomicBool,
     host: crate::platform::Platform,
+    native_trash_roots: &[PathBuf],
+    native_trash_case_insensitive: bool,
 ) -> (u64, Option<DateTime<Utc>>) {
     let mut stack = vec![dir.to_path_buf()];
     let (mut bytes, mut newest) = (0u64, None::<DateTime<Utc>>);
@@ -402,16 +471,27 @@ fn dir_stats(
         if cancel.load(Ordering::Relaxed) {
             break; // a cancelled scan discards its findings anyway
         }
+        if is_native_trash_path(&path, native_trash_roots, native_trash_case_insensitive) {
+            continue;
+        }
         let Ok(entries) = std::fs::read_dir(&path) else {
             continue;
         };
         for entry in entries.flatten() {
-            let Ok(metadata) = std::fs::symlink_metadata(entry.path()) else {
+            let entry_path = entry.path();
+            if is_native_trash_path(
+                &entry_path,
+                native_trash_roots,
+                native_trash_case_insensitive,
+            ) {
+                continue;
+            }
+            let Ok(metadata) = std::fs::symlink_metadata(&entry_path) else {
                 continue;
             };
             let file_type = metadata.file_type();
-            if file_type.is_dir() && !host.is_link_or_reparse_point(&entry.path()) {
-                stack.push(entry.path());
+            if file_type.is_dir() && !host.is_link_or_reparse_point(&entry_path) {
+                stack.push(entry_path);
             } else if file_type.is_file() {
                 bytes += host.allocated_bytes(&metadata);
                 if let Ok(modified) = metadata.modified() {
@@ -789,6 +869,58 @@ mod tests {
         assert!(
             !findings.is_empty(),
             "the scan root exempts itself from the skip list"
+        );
+    }
+
+    #[test]
+    fn native_trash_paths_are_hard_skipped_even_when_the_scan_targets_them() {
+        let fixture = tempfile::tempdir().unwrap();
+        let trash = fixture.path().join("native-trash");
+        let regular = fixture.path().join("regular-cache");
+
+        assert!(is_native_trash_path(
+            &trash.join("files/node_modules"),
+            std::slice::from_ref(&trash),
+            false,
+        ));
+        assert!(is_native_trash_path(
+            &trash.join("files/../files/node_modules"),
+            std::slice::from_ref(&trash),
+            false,
+        ));
+        assert!(is_native_trash_path(
+            &trash,
+            std::slice::from_ref(&trash),
+            false,
+        ));
+        assert!(!is_native_trash_path(
+            &regular,
+            std::slice::from_ref(&trash),
+            false,
+        ));
+        assert!(!is_native_trash_path(
+            &fixture.path().join("native-trash-old"),
+            std::slice::from_ref(&trash),
+            false,
+        ));
+    }
+
+    #[test]
+    fn an_explicit_native_trash_scan_returns_no_findings() {
+        let Some(trash) = crate::platform::current().native_trash_roots().pop() else {
+            return;
+        };
+        let (tx, rx) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+
+        let findings = scan(&trash, &test_options(), tx, &cancel)
+            .expect("an explicit native Trash root is a harmless empty scan");
+
+        assert!(findings.is_empty(), "native Trash must never be reported");
+        let events: Vec<_> = rx.try_iter().collect();
+        assert!(matches!(events.first(), Some(ScanProgress::Started { root }) if root == &trash));
+        assert!(
+            matches!(events.last(), Some(ScanProgress::Finished { findings }) if findings.is_empty())
         );
     }
 }

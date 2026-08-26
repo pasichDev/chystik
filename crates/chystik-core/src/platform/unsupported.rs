@@ -57,6 +57,10 @@ impl Adapter for Unsupported {
         Vec::new()
     }
 
+    fn native_trash_roots(&self) -> Vec<PathBuf> {
+        Vec::new()
+    }
+
     fn storage_stats(&self, _path: &Path) -> Option<StorageStats> {
         None
     }

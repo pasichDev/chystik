@@ -91,6 +91,20 @@ impl Adapter for MacOS {
         .collect()
     }
 
+    fn native_trash_roots(&self) -> Vec<PathBuf> {
+        // Finder keeps the home Trash in `~/.Trash`; removable volumes use
+        // `.Trashes/$uid`. They are exact host-owned recovery stores, never
+        // candidate directories for Chystik.
+        let uid = unsafe { libc::geteuid() };
+        let mut roots = vec![super::home_dir_or_current().join(".Trash")];
+        for volume in self.storage_volumes() {
+            roots.push(volume.mount_point.join(".Trashes").join(uid.to_string()));
+        }
+        roots.sort();
+        roots.dedup();
+        roots
+    }
+
     fn storage_stats(&self, path: &Path) -> Option<StorageStats> {
         unix_storage_stats(path)
     }
