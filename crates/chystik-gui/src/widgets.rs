@@ -150,6 +150,27 @@ pub(crate) fn severity_pill(ui: &mut egui::Ui, sev: Severity, lang: Lang) {
     ));
 }
 
+/// Stable, compact recovery marker for the findings table. Recovery labels
+/// vary substantially by locale, so text pills made the column's geometry
+/// depend on the active language. The column header and hover text preserve
+/// the full recovery meaning without moving neighbouring columns.
+pub(crate) const RECOVERY_DOT_SIZE: f32 = 10.0;
+
+pub(crate) fn recovery_dot(ui: &mut egui::Ui, sev: Severity, lang: Lang) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(RECOVERY_DOT_SIZE, RECOVERY_DOT_SIZE),
+        egui::Sense::hover(),
+    );
+    ui.painter()
+        .circle_filled(rect.center(), RECOVERY_DOT_SIZE / 2.0, severity_color(sev));
+
+    response.on_hover_text(format!(
+        "{} — {}",
+        i18n::severity_label(lang, sev),
+        i18n::severity_cost(lang, sev)
+    ))
+}
+
 /// Display order for severities in the Severity column sort.
 pub(crate) const fn severity_rank(s: Severity) -> u8 {
     match s {

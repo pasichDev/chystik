@@ -90,12 +90,30 @@ pub(crate) struct ChystikApp {
     pub(crate) traces: Vec<chystik_core::privacy::PrivacyItem>,
     /// Indices into `traces` the user ticked. Never pre-populated.
     pub(crate) traces_selected: HashSet<usize>,
+    /// Row whose advisory command was copied, plus the short-lived feedback
+    /// deadline. This belongs to the app rather than a rendered table row so
+    /// a virtualized row cannot lose the feedback between frames.
+    pub(crate) copied_advice: Option<(usize, Instant)>,
     pub(crate) notice: Option<Notice>,
 }
 
 pub(crate) struct Notice {
     pub(crate) title: String,
     pub(crate) lines: Vec<String>,
+}
+
+const FOOTER_ACTION_HEIGHT: f32 = space(8.0);
+const FOOTER_DIVIDER_GAP: f32 = 30.0;
+const FOOTER_HEIGHT: f32 = space(20.0);
+
+/// Reserve an explicit action row directly below the footer divider.
+/// `horizontal_wrapped` owns its own layout cursor, so its placement must not
+/// depend on a preceding `add_space` in the parent UI.
+fn footer_actions_rect(footer_rect: egui::Rect) -> egui::Rect {
+    egui::Rect::from_min_size(
+        egui::pos2(footer_rect.left(), footer_rect.top() + FOOTER_DIVIDER_GAP),
+        egui::vec2(footer_rect.width(), FOOTER_ACTION_HEIGHT),
+    )
 }
 
 /// Inputs the cached view depends on. Any change forces a rebuild.
@@ -140,6 +158,7 @@ impl Default for ChystikApp {
             drives: Vec::new(),
             traces: Vec::new(),
             traces_selected: HashSet::new(),
+            copied_advice: None,
             notice: None,
         }
     }
@@ -519,7 +538,11 @@ impl eframe::App for ChystikApp {
         };
         if footer {
             egui::TopBottomPanel::bottom("footer")
-                .exact_height(space(15.0))
+                .exact_height(FOOTER_HEIGHT)
+                // The footer owns one explicit rule at its top edge. Disable
+                // egui's panel separator so it cannot add a second rule on a
+                // different pixel row around the action buttons.
+                .show_separator_line(false)
                 .frame(
                     egui::Frame::none()
                         .fill(COL_SURFACE)
@@ -527,12 +550,27 @@ impl eframe::App for ChystikApp {
                 )
                 .show(ctx, |ui| {
                     hairline_top(ui);
-                    match self.section {
-                        Section::Privacy => self.privacy_footer_ui(ui),
-                        _ => self.footer_ui(ui),
-                    }
+                    let action_row = footer_actions_rect(ui.max_rect());
+                    ui.allocate_new_ui(
+                        egui::UiBuilder::new().max_rect(action_row),
+                        |ui| match self.section {
+                            Section::Privacy => self.privacy_footer_ui(ui),
+                            _ => self.footer_ui(ui),
+                        },
+                    );
                 });
         }
+
+        // `SidePanel` and `CentralPanel` are rasterized as separate frames.
+        // At fractional display scales their shared logical edge can expose
+        // one physical pixel of the viewport clear colour (`COL_BG`). Paint
+        // one continuous workspace below both panels so that boundary is
+        // always surface-coloured, never a black vertical seam.
+        ctx.layer_painter(egui::LayerId::background()).rect_filled(
+            ctx.available_rect(),
+            egui::Rounding::ZERO,
+            COL_SURFACE,
+        );
 
         // The category rail belongs to the cleanup view alone. Disks and
         // Privacy are single-column: nothing to filter down.
@@ -540,6 +578,11 @@ impl eframe::App for ChystikApp {
             egui::SidePanel::left("categories")
                 .exact_width(SIDEBAR_W)
                 .resizable(false)
+                // The side panel otherwise draws its built-in separator.
+                // A second hand-painted line used to sit on the same edge;
+                // at fractional display scales the two strokes looked like a
+                // dark empty strip between the sidebar and the content list.
+                .show_separator_line(false)
                 .frame(
                     egui::Frame::none()
                         .fill(COL_SURFACE)
@@ -547,12 +590,6 @@ impl eframe::App for ChystikApp {
                 )
                 .show(ctx, |ui| {
                     self.sidebar_ui(ui);
-                    let r = ui.max_rect();
-                    ui.painter().vline(
-                        r.right() - 0.5,
-                        r.y_range(),
-                        egui::Stroke::new(1.0_f32, COL_LINE),
-                    );
                 });
         }
 
@@ -914,6 +951,15 @@ mod tests {
             advice: None,
             provenance: None,
         }
+    }
+
+    #[test]
+    fn footer_action_row_keeps_a_thirty_pixel_gap_below_the_divider() {
+        let footer = egui::Rect::from_min_size(egui::pos2(0.0, 8.0), egui::vec2(800.0, 64.0));
+        let row = footer_actions_rect(footer);
+
+        assert_eq!(row.top(), 38.0);
+        assert_eq!(row.bottom(), 70.0);
     }
 
     #[cfg(target_os = "macos")]

@@ -4,6 +4,22 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-08-26
+
+### Added
+
+- Compact colour recovery markers in the cleanup table, with the full
+  recovery meaning available on hover.
+
+### Fixed
+
+- Keep cleanup-table columns fixed while long paths and descriptions scroll
+  into view, so item details cannot push adjacent fields sideways.
+- Separate command-copy feedback from finding detail tooltips; copied commands
+  now show stable inline confirmation instead of a flashing one-frame modal.
+- Refine the cleanup and privacy footer action area with a single divider and
+  intentional space above its controls.
+
 ## [0.2.2] - 2026-08-26
 
 ### Added
