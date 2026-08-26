@@ -81,6 +81,45 @@ fn filters_and_sorts_without_changing_the_input() {
 }
 
 #[test]
+fn automatic_cleanup_filter_uses_policy_not_recovery_label_alone() {
+    let mut automatic_but_review = finding("/scan/review", Severity::Safe, 100);
+    automatic_but_review.provenance = Some(RuleProvenance {
+        rule_id: "fixture.review".into(),
+        source_url: "https://example.test/review".into(),
+        policy: FindingPolicy::DirectReview,
+        recovery_cost: "fixture".into(),
+        reviewed_at: "2026-08-26".into(),
+        preconditions: vec!["fixture".into()],
+    });
+    let mut invalid_manual_direct = finding("/scan/manual", Severity::Risky, 200);
+    invalid_manual_direct.provenance = Some(RuleProvenance {
+        rule_id: "fixture.invalid".into(),
+        source_url: "https://example.test/invalid".into(),
+        policy: FindingPolicy::DirectSafe,
+        recovery_cost: "fixture".into(),
+        reviewed_at: "2026-08-26".into(),
+        preconditions: vec!["fixture".into()],
+    });
+    let findings = vec![
+        finding("/scan/auto", Severity::Safe, 50),
+        automatic_but_review,
+        invalid_manual_direct,
+    ];
+
+    let selected = filter_and_sort(
+        &findings,
+        &FindingFilter {
+            auto_cleanable_only: true,
+            ..FindingFilter::default()
+        },
+        SortKey::Path,
+    );
+
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].path, PathBuf::from("/scan/auto"));
+}
+
+#[test]
 fn safe_cleanup_plan_never_selects_excluded_advisory_risky_or_review_findings() {
     let sandbox = tempfile::tempdir().unwrap();
     let root = sandbox.path().join("scan");
@@ -245,6 +284,7 @@ fn explain_returns_the_same_rule_metadata_as_a_scan_for_a_known_path() {
         Explanation::Recognized {
             category: Category::BuildArtifacts,
             severity: Severity::Moderate,
+            cleanup_policy: FindingPolicy::DirectReview,
             ..
         }
     ));

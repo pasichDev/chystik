@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - 'site/**'
+      - 'scripts/build-site.sh'
+      - 'Cargo.toml'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
 
@@ -25,19 +27,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Build site from the Cargo workspace version
+        run: bash scripts/build-site.sh "$RUNNER_TEMP/site"
+
+      - name: Validate generated site and version contract
+        run: bash site/tests/site-contract.sh
+
       - name: Check every referenced local asset exists
         run: |
           set -euo pipefail
           # Local src/href targets only: skip absolute URLs and in-page anchors.
-          grep -ohE '(src|href)="[^"#][^"]*"' site/*.html \
+          grep -ohE '(src|href)="[^"#][^"]*"' "$RUNNER_TEMP/site"/*.html \
             | sed -E 's/^[a-z]+="//; s/"$//' \
             | { grep -vE '^(https?:)?//' || true; } \
             | sort -u > "$RUNNER_TEMP/refs.txt"
           status=0
           while read -r ref; do
             [ -n "$ref" ] || continue
-            if [ ! -f "site/$ref" ]; then
-              echo "::error file=site/index.html::missing local asset: $ref"
+            if [ ! -f "$RUNNER_TEMP/site/$ref" ]; then
+              echo "::error file=site/index.html::missing generated local asset: $ref"
               status=1
             fi
           done < "$RUNNER_TEMP/refs.txt"
@@ -53,7 +61,7 @@ jobs:
 
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: site
+          path: ${{ runner.temp }}/site
 
   deploy:
     name: deploy

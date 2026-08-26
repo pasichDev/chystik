@@ -1,0 +1,99 @@
+name: New cleanup rule
+description: Propose one evidence-backed, exact-path catalog rule.
+title: "rule: "
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Before you submit
+        Remove usernames, tokens, project names, and private paths. Rules must be exact and evidence-backed; never propose a broad cache parent, profile, project root, or application-data directory.
+  - type: input
+    id: tool
+    attributes:
+      label: Tool or application
+      placeholder: "Example: pip"
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Linux
+        - macOS
+        - Windows
+        - Multiple platforms
+    validations:
+      required: true
+  - type: input
+    id: path
+    attributes:
+      label: Exact sanitized directory or path
+      description: Do not include a real username or private project name.
+      placeholder: "~/.cache/example-tool"
+    validations:
+      required: true
+  - type: textarea
+    id: contents
+    attributes:
+      label: What does this path contain?
+    validations:
+      required: true
+  - type: textarea
+    id: restore
+    attributes:
+      label: How is it restored?
+      description: State whether it returns automatically, after rebuild/redownload, or needs manual recovery.
+    validations:
+      required: true
+  - type: dropdown
+    id: recovery
+    attributes:
+      label: Proposed recovery class
+      options:
+        - Automatic
+        - Rebuild / redownload
+        - Manual / irreplaceable
+    validations:
+      required: true
+  - type: dropdown
+    id: cleanup_policy
+    attributes:
+      label: Proposed cleanup policy
+      options:
+        - Auto-cleanable
+        - Review required
+        - Tool-managed
+        - Advisory only
+    validations:
+      required: true
+  - type: input
+    id: source
+    attributes:
+      label: Authoritative vendor or upstream documentation URL
+      placeholder: "https://..."
+    validations:
+      required: true
+  - type: dropdown
+    id: configurable
+    attributes:
+      label: Is the location configurable?
+      options:
+        - No, fixed documented location
+        - Yes, environment/config override
+        - Unknown
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Example Chystik output (optional)
+      description: Sanitize paths and remove personal information.
+  - type: checkboxes
+    id: siblings
+    attributes:
+      label: Safety check
+      options:
+        - label: I checked nearby sibling paths and this rule does not need to match them.
+          required: true

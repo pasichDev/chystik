@@ -441,13 +441,13 @@ impl ChystikApp {
                         } else {
                             (
                                 i18n::fill(
-                                    s.select_safe.as_str(),
+                                    s.select_auto_cleanable.as_str(),
                                     &[
                                         ("n", &selectable.len().to_string()),
                                         ("size", &format_size(selectable_bytes)),
                                     ],
                                 ),
-                                s.select_safe_hint.as_str(),
+                                s.select_auto_cleanable_hint.as_str(),
                             )
                         };
                         if ui
@@ -580,8 +580,12 @@ impl ChystikApp {
                             sortable(&mut header, SortCol::Path, s.col_path.as_str(), false);
                         let size_c =
                             sortable(&mut header, SortCol::Size, s.col_size.as_str(), true);
-                        let sev_c =
-                            sortable(&mut header, SortCol::Severity, s.col_risk.as_str(), false);
+                        let sev_c = sortable(
+                            &mut header,
+                            SortCol::Severity,
+                            s.col_recovery.as_str(),
+                            false,
+                        );
                         let age_c = sortable(&mut header, SortCol::Age, s.col_age.as_str(), false);
 
                         sort_click = if size_c {
@@ -771,38 +775,43 @@ impl ChystikApp {
         let sel_count = selected.len();
         let sel_bytes: u64 = selected.iter().map(|(_, f)| f.size_bytes).sum();
         let busy = self.scanning();
-        let review_bytes = self.view.buckets.risky_total();
+        let totals = self.view.cleanup_totals;
 
-        ui.horizontal_centered(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if sel_count == 0 {
-                ui.label(txt(
-                    i18n::fill(
-                        s.shown_needs_review.as_str(),
-                        &[
-                            ("n", &self.view.rows.len().to_string()),
-                            ("size", &format_size(review_bytes)),
-                        ],
+                for (label, count, bytes, color) in [
+                    (
+                        s.totals_found.as_str(),
+                        totals.found_count,
+                        totals.found_bytes,
+                        COL_TEXT3,
                     ),
-                    "caption",
-                    COL_TEXT3,
-                ));
-                let advisory_bytes: u64 = self
-                    .view
-                    .rows
-                    .iter()
-                    .map(|i| &self.findings[*i])
-                    .filter(|f| !f.is_actionable())
-                    .map(|f| f.size_bytes)
-                    .sum();
-                if advisory_bytes > 0 {
-                    ui.label(txt("\u{b7}", "caption", COL_TEXT3));
+                    (
+                        s.totals_auto_cleanable.as_str(),
+                        totals.auto_cleanable_count,
+                        totals.auto_cleanable_bytes,
+                        severity_color(Severity::Safe),
+                    ),
+                    (
+                        s.totals_review_required.as_str(),
+                        totals.review_required_count,
+                        totals.review_required_bytes,
+                        severity_color(Severity::Moderate),
+                    ),
+                    (
+                        s.totals_manual_valuable.as_str(),
+                        totals.manual_count,
+                        totals.manual_bytes,
+                        severity_color(Severity::Risky),
+                    ),
+                ] {
                     ui.label(txt(
                         i18n::fill(
-                            s.shown_advisory.as_str(),
-                            &[("size", &format_size(advisory_bytes))],
+                            label,
+                            &[("n", &count.to_string()), ("size", &format_size(bytes))],
                         ),
                         "caption",
-                        COL_ACCENT,
+                        color,
                     ));
                 }
             } else {
@@ -1214,11 +1223,16 @@ fn finding_tooltip(lang: i18n::Lang, finding: &chystik_core::model::Finding) -> 
         finding.path.display().to_string(),
         finding.note.clone(),
         format!(
-            "{} — {}",
+            "{}: {} — {}",
+            strings.recovery_heading,
             i18n::severity_label(lang, finding.severity),
             i18n::severity_cost(lang, finding.severity),
         ),
-        i18n::policy_label(lang, finding.policy()).to_owned(),
+        format!(
+            "{}: {}",
+            strings.cleanup_heading,
+            i18n::policy_label(lang, finding.policy()),
+        ),
     ];
     if let Some(provenance) = &finding.provenance {
         lines.push(format!("{}: {}", strings.evidence_rule, provenance.rule_id));
@@ -1254,11 +1268,10 @@ fn finding_tooltip(lang: i18n::Lang, finding: &chystik_core::model::Finding) -> 
 }
 
 /// Bulk selection is a stricter promise than a manual tick: only findings
-/// that are both cheap to recreate and explicitly `DirectSafe` may enter it.
+/// that have automatic recovery and the explicit `DirectSafe` policy may enter it.
 /// A `DirectReview` finding remains available as a deliberate per-row choice.
 fn is_bulk_safe_finding(finding: &chystik_core::model::Finding) -> bool {
-    finding.severity == Severity::Safe
-        && finding.policy() == chystik_core::model::FindingPolicy::DirectSafe
+    finding.is_auto_cleanable()
 }
 
 /// A horizontal capacity bar.
@@ -1291,11 +1304,11 @@ mod tests {
 
     use super::{finding_tooltip, is_bulk_safe_finding};
 
-    fn finding(policy: Option<FindingPolicy>) -> Finding {
+    fn finding(severity: Severity, policy: Option<FindingPolicy>) -> Finding {
         Finding {
             path: PathBuf::from("/tmp/finding"),
             category: Category::PackageCaches,
-            severity: Severity::Safe,
+            severity,
             size_bytes: 1,
             last_used: None,
             mount: None,
@@ -1314,23 +1327,30 @@ mod tests {
 
     #[test]
     fn bulk_selection_accepts_only_direct_safe_policy() {
-        assert!(is_bulk_safe_finding(&finding(None)));
-        assert!(is_bulk_safe_finding(&finding(Some(
-            FindingPolicy::DirectSafe
-        ))));
-        assert!(!is_bulk_safe_finding(&finding(Some(
-            FindingPolicy::DirectReview
-        ))));
-        assert!(!is_bulk_safe_finding(&finding(Some(
-            FindingPolicy::VendorCommandOnly
-        ))));
+        assert!(is_bulk_safe_finding(&finding(Severity::Safe, None)));
+        assert!(is_bulk_safe_finding(&finding(
+            Severity::Safe,
+            Some(FindingPolicy::DirectSafe)
+        )));
+        assert!(!is_bulk_safe_finding(&finding(
+            Severity::Safe,
+            Some(FindingPolicy::DirectReview)
+        )));
+        assert!(!is_bulk_safe_finding(&finding(
+            Severity::Safe,
+            Some(FindingPolicy::VendorCommandOnly)
+        )));
+        assert!(!is_bulk_safe_finding(&finding(
+            Severity::Risky,
+            Some(FindingPolicy::DirectSafe)
+        )));
     }
 
     #[test]
     fn tooltip_exposes_catalog_review_and_conditions() {
         let tooltip = finding_tooltip(
             crate::i18n::Lang::En,
-            &finding(Some(FindingPolicy::DirectSafe)),
+            &finding(Severity::Safe, Some(FindingPolicy::DirectSafe)),
         );
         assert!(tooltip.contains("Last reviewed: 2026-08-26"));
         assert!(tooltip.contains("Conditions:\n• fixture precondition"));

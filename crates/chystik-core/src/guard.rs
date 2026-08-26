@@ -4,7 +4,8 @@
 //! defence before any deletion; every path passes through `check()`.
 
 use crate::model::ChystikError;
-use std::path::Path;
+use std::ffi::OsStr;
+use std::path::{Component, Path, PathBuf};
 
 /// Refuse these directory names anywhere in the tree.
 pub const PROTECTED_NAMES: &[&str] = &[".git", ".ssh", ".gnupg", ".config"];
@@ -40,6 +41,47 @@ pub const PRIVACY_ALLOWLIST: &[&str] = &[
     ".config/chromium/Default/Cookies",
 ];
 
+/// Return a normalized lexical representation without reading the filesystem.
+///
+/// This is deliberately narrower than `canonicalize`: it resolves only `.`
+/// and `..` and refuses a path that attempts to walk above its lexical root.
+/// The cleanup guard still canonicalizes and checks every filesystem link;
+/// this helper merely ensures equivalent path spellings cannot evade the
+/// scan-root comparison before that final authority runs.
+pub fn normalize_lexically(path: &Path) -> Option<PathBuf> {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => {
+                if !normalized.as_os_str().is_empty() {
+                    return None;
+                }
+                normalized.push(prefix.as_os_str());
+            }
+            Component::RootDir => normalized.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    return None;
+                }
+            }
+            Component::Normal(name) => normalized.push(name),
+        }
+    }
+    Some(normalized)
+}
+
+/// Check protected component names without following, reading, or deleting a
+/// path. Fuzzers use this pure operation so arbitrary input cannot touch host
+/// storage; `check` applies the same rule before cleanup.
+pub fn lexical_path_contains_protected_name(path: &Path) -> bool {
+    path.components().any(|component| {
+        PROTECTED_NAMES
+            .iter()
+            .any(|name| component.as_os_str() == OsStr::new(name))
+    })
+}
+
 /// True when `candidate` is one of the allowlisted `.config` caches (or
 /// lives inside one).
 fn is_allowlisted_config_cache(candidate: &Path) -> bool {
@@ -74,6 +116,18 @@ fn is_allowlisted_config_cache(candidate: &Path) -> bool {
 /// test, and deletes `important-data/sub`.
 pub fn check(candidate: &Path, scan_root: &Path) -> Result<(), ChystikError> {
     let refuse = || Err(ChystikError::ProtectedPath(candidate.to_path_buf()));
+
+    let (Some(normalized_candidate), Some(normalized_root)) = (
+        normalize_lexically(candidate),
+        normalize_lexically(scan_root),
+    ) else {
+        return refuse();
+    };
+    if normalized_candidate == normalized_root
+        || !normalized_candidate.starts_with(&normalized_root)
+    {
+        return refuse();
+    }
 
     // Must exist; symlink_metadata does NOT follow symlinks.
     let Ok(meta) = std::fs::symlink_metadata(candidate) else {
@@ -146,13 +200,19 @@ fn is_protected_location(path: &Path, original: &Path) -> bool {
     if crate::platform::current().is_protected_system_path(path) {
         return true;
     }
+    if !lexical_path_contains_protected_name(path) {
+        return false;
+    }
     // Protected dot-dirs anywhere along the path. `.config` alone has
     // audited cache exceptions; `.git`/`.ssh`/`.gnupg` never do.
-    for component in path.components().filter_map(|c| c.as_os_str().to_str()) {
-        if !PROTECTED_NAMES.contains(&component) {
+    for component in path.components().map(|component| component.as_os_str()) {
+        if !PROTECTED_NAMES
+            .iter()
+            .any(|name| component == OsStr::new(name))
+        {
             continue;
         }
-        if component == ".config"
+        if component == OsStr::new(".config")
             && (is_allowlisted_config_cache(path) || is_allowlisted_config_cache(original))
         {
             continue;

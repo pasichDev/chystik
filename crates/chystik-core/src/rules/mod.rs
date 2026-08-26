@@ -4,6 +4,7 @@ pub(crate) mod ai_agents;
 pub(crate) mod android;
 pub(crate) mod browsers;
 pub(crate) mod catalog;
+pub(crate) mod catalog_schema;
 pub(crate) mod cloud;
 pub(crate) mod comms;
 pub(crate) mod containers;
@@ -258,12 +259,10 @@ fn classify_legacy(dir: &Path) -> Option<ClassifiedRule> {
     })
 }
 
-/// Evaluate all registered rule sets and return the original lightweight
-/// match for callers that do not need catalog provenance.
-pub(crate) fn classify(dir: &Path) -> Option<Match> {
-    RuleEngine::current()
-        .classify_with_metadata(dir)
-        .map(|classified| classified.matched)
+/// Evaluate one path while retaining catalog policy/evidence for callers
+/// that need to present recovery and cleanup authority separately.
+pub(crate) fn classify_with_metadata(dir: &Path) -> Option<ClassifiedRule> {
+    RuleEngine::current().classify_with_metadata(dir)
 }
 
 #[cfg(test)]
@@ -312,7 +311,10 @@ mod tests {
         std::fs::write(proj.join("package.json"), "{}").unwrap();
         std::fs::write(proj.join("package-lock.json"), "{}").unwrap();
 
-        let m = classify(&proj.join("node_modules")).expect("registry match");
+        let m = RuleEngine::current()
+            .classify_with_metadata(&proj.join("node_modules"))
+            .expect("registry match")
+            .matched;
         assert_eq!(m.category, Category::BuildArtifacts);
     }
 

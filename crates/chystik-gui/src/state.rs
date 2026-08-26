@@ -6,7 +6,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
-use chystik_core::model::{Category, Finding, Severity};
+use chystik_core::model::{Category, Finding, FindingPolicy, RecoveryClass, Severity};
 use chystik_core::platform::StorageVolume;
 
 // ---------------------------------------------------------------------------
@@ -60,6 +60,40 @@ pub(crate) struct CleanBuckets {
     pub(crate) risky_bytes: u64,
 }
 
+/// User-facing totals for the two independent finding axes. These deliberately
+/// overlap: a valuable item can require review, while an automatic recovery
+/// class alone never grants cleanup permission.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct CleanupTotals {
+    pub(crate) found_count: usize,
+    pub(crate) found_bytes: u64,
+    pub(crate) auto_cleanable_count: usize,
+    pub(crate) auto_cleanable_bytes: u64,
+    pub(crate) review_required_count: usize,
+    pub(crate) review_required_bytes: u64,
+    pub(crate) manual_count: usize,
+    pub(crate) manual_bytes: u64,
+}
+
+impl CleanupTotals {
+    pub(crate) fn add(&mut self, finding: &Finding) {
+        self.found_count += 1;
+        self.found_bytes += finding.size_bytes;
+        if finding.is_auto_cleanable() {
+            self.auto_cleanable_count += 1;
+            self.auto_cleanable_bytes += finding.size_bytes;
+        }
+        if finding.policy() == FindingPolicy::DirectReview {
+            self.review_required_count += 1;
+            self.review_required_bytes += finding.size_bytes;
+        }
+        if finding.recovery_class() == RecoveryClass::ManualOrIrreplaceable {
+            self.manual_count += 1;
+            self.manual_bytes += finding.size_bytes;
+        }
+    }
+}
+
 /// Inputs the cached view depends on. Any change forces a rebuild.
 #[derive(PartialEq)]
 pub(crate) struct ViewStamp {
@@ -78,7 +112,7 @@ pub(crate) struct ViewStamp {
 pub(crate) struct ViewCache {
     /// Indices into `findings` passing filters, in current sort order.
     pub(crate) rows: Vec<usize>,
-    pub(crate) buckets: CleanBuckets,
+    pub(crate) cleanup_totals: CleanupTotals,
     /// Per-category rollup over everything the severity/search filters
     /// admit, IGNORING the category filter — the sidebar must keep showing
     /// every category while one of them is selected.
@@ -203,6 +237,7 @@ pub(crate) fn clean_buckets<'a>(rows: impl IntoIterator<Item = &'a Finding>) -> 
 }
 
 impl CleanBuckets {
+    #[cfg(test)]
     pub(crate) fn add(&mut self, f: &Finding) {
         match f.severity {
             Severity::Safe => self.safe_bytes += f.size_bytes,
@@ -212,6 +247,7 @@ impl CleanBuckets {
     }
 
     /// Everything that deserves a second look before deletion.
+    #[cfg(test)]
     pub(crate) fn risky_total(&self) -> u64 {
         self.moderate_bytes + self.risky_bytes
     }
@@ -260,6 +296,39 @@ mod tests {
         assert_eq!(b.risky_total(), 50);
         let empty = clean_buckets(std::iter::empty::<&Finding>());
         assert_eq!((empty.safe_bytes, empty.risky_total()), (0, 0));
+    }
+
+    #[test]
+    fn cleanup_totals_keep_recovery_and_policy_separate() {
+        let mut automatic_review = finding(Severity::Safe, 30, None, "/review");
+        automatic_review.provenance = Some(chystik_core::model::RuleProvenance {
+            rule_id: "fixture.review".into(),
+            source_url: "https://example.test/rule".into(),
+            policy: FindingPolicy::DirectReview,
+            recovery_cost: "fixture".into(),
+            reviewed_at: "2026-08-26".into(),
+            preconditions: vec!["fixture".into()],
+        });
+        let rows = [
+            finding(Severity::Safe, 10, None, "/auto"),
+            automatic_review,
+            finding(Severity::Risky, 40, None, "/manual"),
+        ];
+        let mut totals = CleanupTotals::default();
+        for finding in &rows {
+            totals.add(finding);
+        }
+
+        assert_eq!((totals.found_count, totals.found_bytes), (3, 80));
+        assert_eq!(
+            (totals.auto_cleanable_count, totals.auto_cleanable_bytes),
+            (1, 10)
+        );
+        assert_eq!(
+            (totals.review_required_count, totals.review_required_bytes),
+            (2, 70)
+        );
+        assert_eq!((totals.manual_count, totals.manual_bytes), (1, 40));
     }
 
     #[test]

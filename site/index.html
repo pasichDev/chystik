@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Chystik — a safety-first disk cleaner</title>
-<meta name="description" content="Chystik classifies what it finds, rates every item by the cost of losing it, and deletes only through the desktop trash. Read the safety model.">
+<meta name="description" content="Chystik classifies what it finds, explains recovery cost and cleanup policy separately, and moves selected items only through the desktop trash.">
 <link rel="canonical" href="https://pasichdev.github.io/chystik/">
 <link rel="icon" href="assets/icon.png">
 <meta name="theme-color" content="#fbfaf7" media="(prefers-color-scheme: light)">
@@ -42,6 +42,11 @@
   .masthead h1{font-size:42px;margin:14px 0 6px;letter-spacing:.02em;font-weight:600}
   .masthead .sub{font-family:var(--sans);font-size:15px;color:var(--ink-2);letter-spacing:.02em;margin:0}
   .masthead .meta{font-family:var(--mono);font-size:12px;color:var(--ink-2);letter-spacing:.1em;text-transform:uppercase;margin-top:18px}
+  .actions{display:flex;justify-content:center;gap:12px;flex-wrap:wrap;margin-top:20px;font-family:var(--sans);font-size:14px}
+  .actions a{border:1px solid var(--rule-2);padding:8px 14px;text-decoration:none;color:var(--ink)}
+  .actions a.primary{background:var(--accent);border-color:var(--accent);color:var(--paper);font-weight:600}
+  .actions a:hover{border-color:var(--accent)}
+  .actions a:focus-visible{outline:3px solid var(--moderate);outline-offset:3px}
 
   /* abstract */
   .abstract{padding:34px 0;border-bottom:1px solid var(--rule)}
@@ -105,7 +110,11 @@
     <img src="assets/icon.png" alt="">
     <h1>Chystik</h1>
     <p class="sub">A safety-first disk-cleanup tool that knows what a directory <em>is</em>.</p>
-    <div class="meta">Version 0.1.0 · MIT · Written in Rust</div>
+    <div class="meta">Version {{VERSION}} · MIT · Written in Rust</div>
+    <div class="actions" aria-label="Project links">
+      <a class="primary" href="https://github.com/pasichDev/chystik/releases/latest">Download latest</a>
+      <a href="https://github.com/pasichDev/chystik">View source</a>
+    </div>
   </div>
 
   <div class="abstract">
@@ -113,15 +122,15 @@
     <p>Disk analysers like QDirStat and Filelight tell you a directory is 8&nbsp;GB. They do not tell
        you that it is <code>~/.cache/go-build</code>, that Go rebuilds it on the next compile, and
        that deleting it costs you forty seconds. Chystik does.</p>
-    <p>It classifies what it finds into fifteen categories, rates every item by what losing it
-       actually costs, and — where native-trash safety is verified — moves what you choose to the
-       desktop trash, never straight to <code>unlink</code>.</p>
+    <p>It classifies what it finds into fifteen categories, reports both the cost of losing an item
+       and whether Chystik may clean it automatically, and — where native-trash safety is verified
+       — moves what you choose to the desktop trash, never straight to <code>unlink</code>.</p>
   </div>
 
   <nav class="toc">
     <ol>
       <li><a href="#s1">What it does</a></li>
-      <li><a href="#s2">Severity</a></li>
+      <li><a href="#s2">Recovery &amp; cleanup</a></li>
       <li><a href="#s3">Safety model</a></li>
       <li><a href="#s4">Categories</a></li>
       <li><a href="#s5">Command line</a></li>
@@ -135,7 +144,7 @@
     <h2><span class="n">1</span> What it does</h2>
     <figure>
       <img src="assets/screenshot-gui.png" alt="Chystik after scanning a Linux system: category rail on the left, findings with size, risk and last-used on the right.">
-      <figcaption>The category rail answers <em>“what is worth doing?”</em>; the detail pane answers <em>“is this one safe?”</em></figcaption>
+      <figcaption>The category rail answers <em>“what is worth doing?”</em>; the detail pane answers <em>“what recovery costs, and may Chystik clean this?”</em></figcaption>
     </figure>
     <h3>Understands, not just measures</h3>
     <p>Roughly two hundred rules recognise package caches, build outputs, downloaded toolchains,
@@ -149,25 +158,31 @@
     <p>Linux, macOS and Windows deletion go through their native desktop recovery mechanisms. On a
        platform without a verified native-trash adapter, cleanup is disabled rather than falling
        back to direct deletion.</p>
-    <h3>Fast</h3>
-    <p>A full Linux scan of <code>/</code> on a developer machine takes about a second: a parallel
-       <code>jwalk</code> walk that prunes a subtree as soon as it is classified, and skips pseudo,
-       read-only and network mounts entirely. The interface is available in English and Ukrainian,
-       detected from your locale.</p>
+    <h3>Pruned parallel scan</h3>
+    <p>Chystik prunes a classified subtree during its parallel <code>jwalk</code> walk and skips
+       pseudo, read-only and network mounts. See the <a href="https://github.com/pasichDev/chystik/blob/main/docs/BENCHMARKS.md">reproducible benchmark method and reference measurements</a>;
+       timings depend on the machine, filesystem, target and cache state. The interface is available
+       in English and Ukrainian, detected from your locale.</p>
   </section>
 
   <section id="s2">
-    <h2><span class="n">2</span> Severity — what does losing it cost?</h2>
+    <h2><span class="n">2</span> Recovery and cleanup are separate</h2>
+    <p><strong>Recovery</strong> says what losing data costs. <strong>Cleanup policy</strong> says
+       what Chystik is allowed to do. An automatic recovery class alone never grants deletion
+       permission.</p>
     <dl>
-      <dt><span class="sev s">Safe</span>Regenerates on its own</dt>
+      <dt><span class="sev s">Automatic</span>Recovers on its own</dt>
       <dd>A Go build cache, a pip wheel cache, a thumbnail store. You do nothing; the tool that made
           it makes it again.</dd>
-      <dt><span class="sev m">Moderate</span>Costs a re-download or a rebuild</dt>
+      <dt><span class="sev m">Rebuild / redownload</span>Costs time to recover</dt>
       <dd>A Rust <code>target</code> directory, a <code>node_modules</code> with a lockfile beside it,
           a Gradle distribution. Recoverable, but you will wait.</dd>
-      <dt><span class="sev r">Risky</span>Cannot be recreated automatically</dt>
+      <dt><span class="sev r">Manual / irreplaceable</span>Does not come back automatically</dt>
       <dd>Downloaded model weights, agent transcripts. Never included in a bulk selection — these are
           ticked one at a time, or not at all.</dd>
+      <dt>Auto-cleanable</dt>
+      <dd>Chystik may include the exact, guard-approved path in automatic cleanup. Review required,
+          tool-managed and advisory-only findings never join that bulk action.</dd>
     </dl>
   </section>
 
@@ -180,7 +195,8 @@
         <thead><tr><th>Layer</th><th>What it does</th></tr></thead>
         <tbody>
           <tr><td>Rules</td><td>Only match paths a rule explicitly recognises. There is no “delete anything over N GB”.</td></tr>
-          <tr><td>Severity</td><td>Every match carries the cost of losing it; Risky is excluded from bulk selection.</td></tr>
+          <tr><td>Recovery</td><td>Every match states its recovery cost. Manual / irreplaceable data is never bulk-selectable.</td></tr>
+          <tr><td>Cleanup policy</td><td>Only Auto-cleanable exact paths can join <code>clean --safe</code>; review-required, tool-managed and advisory findings cannot.</td></tr>
           <tr><td>Size floor</td><td>Findings under 1 MiB are dropped, so the signal is not buried in noise.</td></tr>
           <tr><td>Guard</td><td><code>guard::check</code> runs before every deletion and refuses platform-protected roots, protected names, symlinks and anything outside the scan root.</td></tr>
           <tr><td>Manifest</td><td>Nothing is deleted until you have seen the full list with per-item guard verdicts.</td></tr>
@@ -254,12 +270,12 @@
   <section id="s7">
     <h2><span class="n">7</span> Installation</h2>
     <h3>Linux release artifacts (x86_64)</h3>
-<pre>chmod +x Chystik-0.1.0-x86_64.AppImage &amp;&amp; ./Chystik-0.1.0-x86_64.AppImage
-sudo apt install ./chystik_0.1.0_amd64.deb
-sudo dnf install ./chystik-0.1.0-1.x86_64.rpm
+<pre>chmod +x Chystik-{{VERSION}}-x86_64.AppImage &amp;&amp; ./Chystik-{{VERSION}}-x86_64.AppImage
+sudo apt install ./chystik_{{VERSION}}_amd64.deb
+sudo dnf install ./chystik-{{VERSION}}-1.x86_64.rpm
 cd packaging/arch &amp;&amp; makepkg -si</pre>
     <h3>Windows portable ZIP</h3>
-<pre>Expand-Archive .\Chystik-0.1.0-windows-x86_64.zip -DestinationPath .\Chystik
+<pre>Expand-Archive .\Chystik-{{VERSION}}-windows-x86_64.zip -DestinationPath .\Chystik
 .\Chystik\Chystik-GUI.exe</pre>
     <h3>From source — Rust 1.80 or newer</h3>
 <pre>git clone https://github.com/pasichDev/chystik

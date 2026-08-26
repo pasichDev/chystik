@@ -1,0 +1,59 @@
+[[rule]]
+id = "nvidia.optix.cache"
+category = "package-caches"
+recovery = "automatic"
+recovery_note = "the next OptiX workload recompiles kernels"
+cleanup_policy = "auto-cleanable"
+note = "NVIDIA OptiX compilation cache — recreated by the next OptiX run"
+source_url = "https://raytracing-docs.nvidia.com/optix9/api/OptiX_API_Reference.pdf"
+reviewed_at = "2026-08-26"
+preconditions = [
+  "the path is the exact documented cache root",
+  "the path remains inside a Chystik-owned user root",
+]
+
+[[rule.locator]]
+platform = "windows"
+root = "local-app-data"
+path = "NVIDIA/OptixCache"
+
+[[rule]]
+id = "nvidia.optix.cache.custom-location"
+category = "package-caches"
+recovery = "automatic"
+recovery_note = "the next OptiX workload recompiles kernels"
+cleanup_policy = "review-required"
+note = "NVIDIA OptiX compilation cache — recreated by the next OptiX run"
+source_url = "https://raytracing-docs.nvidia.com/optix9/api/OptiX_API_Reference.pdf"
+reviewed_at = "2026-08-26"
+preconditions = [
+  "the environment override names an exact tool-cache root",
+  "the resolved path remains inside a Chystik-owned user root",
+]
+
+[[rule.locator]]
+platform = "all"
+root = "environment"
+environment = "OPTIX_CACHE_PATH"
+
+[[rule]]
+id = "nvidia.extracted-installer"
+category = "installers"
+recovery = "rebuild-redownload"
+recovery_note = "re-download the NVIDIA driver package if setup is needed again"
+cleanup_policy = "review-required"
+note = "NVIDIA extracted driver installer — close setup before moving it to Trash"
+source_url = "https://nvidia.custhelp.com/app/answers/detail/a_id/2985/"
+reviewed_at = "2026-08-26"
+preconditions = [
+  "the path is under the exact vendor staging root",
+  "the documented installer layout markers are present",
+]
+
+[[rule.locator]]
+platform = "windows"
+root = "volume-root"
+path = "NVIDIA"
+matcher = "descendant-with-markers"
+required_files = ["setup.exe"]
+required_dirs = ["Display.Driver"]

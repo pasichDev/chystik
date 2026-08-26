@@ -8,6 +8,7 @@ source "$repo_root/packaging/linux/common.sh"
 version="$(release_version)"
 bash "$repo_root/packaging/linux/verify-version.sh"
 bash "$repo_root/packaging/linux/verify-version.sh" "v$version"
+bash "$repo_root/site/tests/site-contract.sh"
 
 if bash "$repo_root/packaging/linux/verify-version.sh" 'v999.999.999'; then
     echo 'a mismatched release tag was accepted' >&2

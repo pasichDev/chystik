@@ -1,0 +1,73 @@
+name: False positive / unsafe finding
+description: Report a finding whose classification or cleanup eligibility is unsafe or wrong.
+title: "false positive: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## High priority
+        False positives affect trust and cleanup safety. Do not include credentials, usernames, tokens, or private paths. If this is a security vulnerability, use SECURITY.md instead of a public issue.
+  - type: input
+    id: version
+    attributes:
+      label: Chystik version
+      placeholder: chystik version output
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: OS and platform
+      placeholder: "Example: Windows 11 x64"
+    validations:
+      required: true
+  - type: input
+    id: rule_id
+    attributes:
+      label: Exact rule ID
+      placeholder: "Example: python.pip.cache"
+    validations:
+      required: true
+  - type: input
+    id: path
+    attributes:
+      label: Sanitized finding path
+    validations:
+      required: true
+  - type: input
+    id: classification
+    attributes:
+      label: Current recovery class and cleanup policy
+      placeholder: "Example: Automatic / Auto-cleanable"
+    validations:
+      required: true
+  - type: textarea
+    id: wrong
+    attributes:
+      label: Why is this wrong?
+    validations:
+      required: true
+  - type: dropdown
+    id: impact
+    attributes:
+      label: Did deletion cause data loss or require manual recovery?
+      options:
+        - No deletion attempted
+        - Required manual recovery
+        - Caused data loss
+        - Other impact
+    validations:
+      required: true
+  - type: textarea
+    id: explain
+    attributes:
+      label: Sanitized chystik explain output
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+    validations:
+      required: true

@@ -21,7 +21,7 @@ no root is supplied, the current directory is used. Every root is made
 absolute, verified as an existing directory, and de-duplicated so a child is
 never scanned twice.
 
-Shared scan options are `--safe`, `--severity safe|moderate|risky`,
+Shared scan options are `--safe` (also `--auto-cleanable`), `--severity safe|moderate|risky`,
 `--category CATEGORY`, `--min-size SIZE`, `--include-advisories`,
 `--exclude PATH`, and `--sort size|age|severity|path`. Sizes accept bytes or
 `KiB`, `MiB`, and `GiB` suffixes. The category values are stable snake_case
@@ -36,7 +36,7 @@ payloads go only to stdout; diagnostics and versioned machine errors go only
 to stderr. No ANSI sequences are emitted in either machine format.
 
 Use `--verbose --no-tui` for the human evidence record: catalog-backed
-findings print their policy, stable rule ID, recovery cost, and upstream
+findings print their cleanup policy, stable rule ID, recovery class, and upstream
 source URL, last-review date, and explicit classification conditions. Those
 same fields appear under optional `finding.provenance` in JSON and JSONL.
 Legacy findings omit `provenance` rather than invent evidence.
@@ -73,6 +73,14 @@ chystik report ~/work --format jsonl > chystik-report.jsonl
 chystik explain ~/.cache/go-build
 ```
 
+`--severity` retains its stable machine values (`safe`, `moderate`, `risky`) for
+compatibility, but filters **recovery cost** only. Human output calls the same
+classes **Automatic**, **Rebuild / redownload**, and **Manual / irreplaceable**.
+`--safe` is also retained for compatibility; it now explicitly means “select
+only findings eligible for automatic cleanup under Chystik policy.” It is not a
+recovery filter, and it does not include review-required, tool-managed,
+advisory-only, or manual / valuable data.
+
 ## Cleanup contract
 
 `clean` is intentionally narrower than scan:
@@ -84,9 +92,11 @@ chystik clean ~/work --safe --interactive
 chystik clean ~/work --safe --yes
 ```
 
-- `--safe` is required. A finding enters the plan only when it is both `safe`
-  and policy `direct_safe`; review-only, advisory, vendor-command, moderate,
-  and risky findings are listed as skipped and can never join a bulk cleanup.
+- `--safe` is required (the `--auto-cleanable` alias is equivalent). A finding
+  enters the plan only when it is an Automatic recovery class and policy
+  `direct_safe`. Review-required, tool-managed, advisory-only, rebuild-cost,
+  and manual / irreplaceable findings are listed as skipped and can never join
+  a bulk cleanup.
 - The default is a manifest followed by a terminal confirmation. A pipe or
   redirected stdin is cancelled rather than guessed.
 - `--dry-run` renders a manifest and never calls the remover.
@@ -112,7 +122,7 @@ Every JSON document and every JSONL record contains this stable metadata:
 ```json
 {
   "schema_version": 1,
-  "chystik_version": "0.1.0",
+  "chystik_version": "<workspace version>",
   "platform": "linux",
   "generated_at": "2026-08-25T18:42:15.123Z"
 }
@@ -134,7 +144,7 @@ JSONL command can already have streamed valid records before a later failure:
 ```json
 {
   "schema_version": 1,
-  "chystik_version": "0.1.0",
+  "chystik_version": "<workspace version>",
   "platform": "linux",
   "generated_at": "2026-08-25T18:42:15.123Z",
   "kind": "error",

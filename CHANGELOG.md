@@ -4,6 +4,19 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Declarative, build-validated catalog rules with reviewed TOML sources,
+  property tests for path guards, seed corpus and bounded cargo-fuzz workflow.
+- Reproducible scan-only benchmark fixture and methodology, GitHub Issue Forms,
+  safety-oriented PR checklist, release badges and generated website version.
+
+### Changed
+
+- Recovery cost and cleanup eligibility are now presented as separate axes in
+  the GUI, CLI, docs and catalog schema. Legacy `--safe` remains compatible
+  and now explicitly means auto-cleanable under Chystik policy.
+
 ## [0.2.1] - 2026-08-26
 
 ### Added

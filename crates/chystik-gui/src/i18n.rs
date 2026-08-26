@@ -149,13 +149,13 @@ pub struct Strings {
     // detail
     pub everything_found: String,
     pub everything_found_sub: String,
-    pub select_safe: String,
-    pub select_safe_hint: String,
+    pub select_auto_cleanable: String,
+    pub select_auto_cleanable_hint: String,
     pub clear_selection: String,
     pub clear_selection_hint: String,
     pub col_path: String,
     pub col_size: String,
-    pub col_risk: String,
+    pub col_recovery: String,
     pub col_age: String,
     pub sort_hint: String,
     pub risky_locked_hint: String,
@@ -166,7 +166,10 @@ pub struct Strings {
     pub scanning_title: String,
     pub scanning_body: String,
     // footer
-    pub shown_needs_review: String,
+    pub totals_found: String,
+    pub totals_auto_cleanable: String,
+    pub totals_review_required: String,
+    pub totals_manual_valuable: String,
     pub selected_word: String,
     pub clear: String,
     pub clear_hint: String,
@@ -223,12 +226,13 @@ pub struct Strings {
     pub advice_run: String,
     pub advice_copy: String,
     pub advice_copied: String,
-    pub shown_advisory: String,
     pub policy_direct_safe: String,
     pub policy_direct_review: String,
     pub policy_advisory_only: String,
     pub policy_vendor_command_only: String,
     pub policy_never_clean: String,
+    pub recovery_heading: String,
+    pub cleanup_heading: String,
     pub evidence_rule: String,
     pub evidence_recovery: String,
     pub evidence_source: String,
@@ -424,7 +428,10 @@ mod tests {
         for lang in Lang::ALL {
             let s = strings(lang);
             assert!(s.move_to_trash.contains("{size}"), "{lang:?} move_to_trash");
-            assert!(s.select_safe.contains("{n}") && s.select_safe.contains("{size}"));
+            assert!(
+                s.select_auto_cleanable.contains("{n}")
+                    && s.select_auto_cleanable.contains("{size}")
+            );
             assert!(s.items_in_categories.contains("{n}"));
             assert!(s.items_in_categories.contains("{c}"));
             assert!(s.confirm_sub.contains("{size}"));
@@ -432,6 +439,27 @@ mod tests {
                 assert!(age.contains("{n}"), "{lang:?} age format lost {{n}}");
             }
         }
+    }
+
+    #[test]
+    fn recovery_and_cleanup_labels_are_unambiguous_in_english_and_ukrainian() {
+        assert_eq!(severity_label(Lang::En, Severity::Safe), "Automatic");
+        assert_eq!(
+            severity_label(Lang::En, Severity::Moderate),
+            "Rebuild / redownload"
+        );
+        assert_eq!(
+            severity_label(Lang::Uk, Severity::Risky),
+            "Ручне / невідновлюване"
+        );
+        assert_eq!(
+            policy_label(Lang::En, FindingPolicy::DirectSafe),
+            "Auto-cleanable"
+        );
+        assert_eq!(
+            policy_label(Lang::Uk, FindingPolicy::DirectReview),
+            "Потрібна перевірка"
+        );
     }
 
     #[test]

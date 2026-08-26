@@ -1,0 +1,19 @@
+[[rule]]
+id = "windows.directx-shader-cache"
+category = "system-junk"
+recovery = "automatic"
+recovery_note = "games and graphics applications rebuild shaders on first run"
+cleanup_policy = "advisory-only"
+note = "Windows DirectX shader cache — clear it through Temporary files, not raw deletion"
+source_url = "https://support.microsoft.com/en-us/windows/free-up-drive-space-in-windows-85529ccb-c365-4c84-8d63-4d518db795dc"
+reviewed_at = "2026-08-26"
+preconditions = [
+  "Chystik must not move this path to Trash",
+  "use the owning operating-system or vendor command instead",
+]
+advice = "Open Settings → System → Storage → Temporary files → DirectX Shader Cache"
+
+[[rule.locator]]
+platform = "windows"
+root = "local-app-data"
+path = "D3DSCache"

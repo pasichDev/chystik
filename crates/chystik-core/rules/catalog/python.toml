@@ -1,0 +1,33 @@
+[[rule]]
+id = "python.pip.cache"
+category = "package-caches"
+recovery = "automatic"
+recovery_note = "the next package install re-downloads cached artifacts"
+cleanup_policy = "auto-cleanable"
+note = "pip download and wheel cache — refetched by the next install"
+source_url = "https://pip.pypa.io/en/stable/topics/caching/"
+reviewed_at = "2026-08-26"
+preconditions = [
+  "the path is the exact documented cache root",
+  "the path remains inside a Chystik-owned user root",
+]
+
+[[rule.locator]]
+platform = "linux"
+root = "cache"
+path = "pip"
+
+[[rule.locator]]
+platform = "macos"
+root = "library-caches"
+path = "pip"
+
+[[rule.locator]]
+platform = "windows"
+root = "local-app-data"
+path = "pip/Cache"
+
+[[rule.locator]]
+platform = "all"
+root = "environment"
+environment = "PIP_CACHE_DIR"

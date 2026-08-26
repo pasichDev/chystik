@@ -1,0 +1,69 @@
+name: Platform bug
+description: Report a platform-specific scan, Trash, Recycle Bin, packaging, or GUI issue.
+title: "platform: "
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Chystik version
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS and version
+      placeholder: "Example: Ubuntu 24.04"
+    validations:
+      required: true
+  - type: input
+    id: architecture
+    attributes:
+      label: Architecture
+      placeholder: "Example: x86_64 or aarch64"
+    validations:
+      required: true
+  - type: input
+    id: desktop
+    attributes:
+      label: Desktop environment (if relevant)
+  - type: input
+    id: filesystem
+    attributes:
+      label: Filesystem (if relevant)
+      placeholder: "Example: NTFS, APFS, ext4"
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected operation
+      options:
+        - Scan
+        - Cleanup / Trash / Recycle Bin
+        - GUI
+        - CLI
+        - Packaging or launch
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or output
+      description: Remove tokens, usernames, and private paths.
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+    validations:
+      required: true

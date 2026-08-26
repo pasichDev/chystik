@@ -1,0 +1,45 @@
+name: Fuzz
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 3 * * 1'
+  pull_request:
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'crates/chystik-core/**'
+      - 'fuzz/**'
+      - '.github/workflows/fuzz.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: build${{ github.event_name == 'pull_request' && ' smoke' || ' and bounded run' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install nightly Rust and cargo-fuzz
+        run: |
+          rustup toolchain install nightly --profile minimal
+          cargo install cargo-fuzz --version 0.13.2 --locked
+
+      - name: Build fuzz targets
+        run: cargo +nightly fuzz build
+
+      - name: Run bounded fuzz sessions
+        if: github.event_name != 'pull_request'
+        run: |
+          cargo +nightly fuzz run guard_paths -- -max_total_time=60 -timeout=10
+          cargo +nightly fuzz run canonicalization -- -max_total_time=60 -timeout=10
+
+      - name: Upload crashes and findings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts/
+          if-no-files-found: ignore

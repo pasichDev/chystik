@@ -1,0 +1,131 @@
+[[rule]]
+id = "cpp.ccache"
+category = "package-caches"
+recovery = "automatic"
+recovery_note = "the next C/C++ build recompiles cache misses"
+cleanup_policy = "auto-cleanable"
+note = "ccache compiler outputs — rebuilt while C/C++ projects compile"
+source_url = "https://ccache.dev/manual/latest.html"
+reviewed_at = "2026-08-26"
+preconditions = [
+  "the path is the exact documented cache root",
+  "the path remains inside a Chystik-owned user root",
+]
+
+[[rule.locator]]
+platform = "linux"
+root = "home"
+path = ".ccache"
+
+[[rule.locator]]
+platform = "linux"
+root = "cache"
+path = "ccache"
+
+[[rule.locator]]
+platform = "macos"
+root = "library-caches"
+path = "ccache"
+
+[[rule.locator]]
+platform = "windows"
+root = "local-app-data"
+path = "ccache"
+
+[[rule.locator]]
+platform = "all"
+root = "environment"
+environment = "CCACHE_DIR"
+
+[[rule]]
+id = "cpp.sccache"
+category = "package-caches"
+recovery = "automatic"
+recovery_note = "the next compiler run repopulates local cache entries"
+cleanup_policy = "auto-cleanable"
+note = "sccache compiler outputs — rebuilt while projects compile"
+source_url = "https://android.googlesource.com/toolchain/sccache/+/HEAD/docs/Local.md"
+reviewed_at = "2026-08-26"
+preconditions = [
+  "the path is the exact documented cache root",
+  "the path remains inside a Chystik-owned user root",
+]
+
+[[rule.locator]]
+platform = "linux"
+root = "cache"
+path = "sccache"
+
+[[rule.locator]]
+platform = "macos"
+root = "library-caches"
+path = "Mozilla.sccache"
+
+[[rule.locator]]
+platform = "windows"
+root = "local-app-data"
+path = "Mozilla/sccache"
+
+[[rule.locator]]
+platform = "all"
+root = "environment"
+environment = "SCCACHE_DIR"
+
+[[rule]]
+id = "cpp.vcpkg.binary-archives"
+category = "package-caches"
+recovery = "automatic"
+recovery_note = "the next vcpkg install rebuilds or downloads archives"
+cleanup_policy = "auto-cleanable"
+note = "vcpkg binary archives — rebuilt or downloaded by the next install"
+source_url = "https://learn.microsoft.com/en-us/vcpkg/users/binarycaching"
+reviewed_at = "2026-08-26"
+preconditions = [
+  "the path is the exact documented cache root",
+  "the path remains inside a Chystik-owned user root",
+]
+
+[[rule.locator]]
+platform = "linux"
+root = "cache"
+path = "vcpkg/archives"
+
+[[rule.locator]]
+platform = "macos"
+root = "library-caches"
+path = "vcpkg/archives"
+
+[[rule.locator]]
+platform = "windows"
+root = "local-app-data"
+path = "vcpkg/archives"
+
+[[rule.locator]]
+platform = "all"
+root = "environment"
+environment = "VCPKG_DEFAULT_BINARY_CACHE"
+
+[[rule]]
+id = "cpp.conan-cache"
+category = "package-caches"
+recovery = "rebuild-redownload"
+recovery_note = "Conan downloads or rebuilds selected packages"
+cleanup_policy = "tool-managed"
+note = "Conan package storage — clean it through Conan so package references stay valid"
+source_url = "https://docs.conan.io/2/reference/commands/cache.html"
+reviewed_at = "2026-08-26"
+preconditions = [
+  "Chystik must not move this path to Trash",
+  "use the owning operating-system or vendor command instead",
+]
+advice = "conan cache clean <reference> --download"
+
+[[rule.locator]]
+platform = "linux"
+root = "home"
+path = ".conan2/p"
+
+[[rule.locator]]
+platform = "macos"
+root = "home"
+path = ".conan2/p"

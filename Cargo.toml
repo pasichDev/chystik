@@ -26,3 +26,5 @@ clap = { version = "4.6.6", features = ["derive"] }
 clap_complete = "4.6.6"
 ctrlc = { version = "3.5.2", features = ["termination"] }
 ratatui = { version = "0.29.0", default-features = false, features = ["crossterm"] }
+proptest = "=1.6.0"
+toml = "0.8"
