@@ -79,6 +79,7 @@
     "age_years": "{n} y",
     "age_unknown": "unknown",
     "trash_done_title": "Moved to Trash",
+    "trash_done_recovery": "Recovery is handled by your operating system",
     "trash_moved": "{n} items moved · {size} reclaimed",
     "trash_skipped": "{n} skipped by the safety guard",
     "export_done": "Export complete",

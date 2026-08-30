@@ -79,6 +79,7 @@
     "age_years": "{n} J",
     "age_unknown": "unbekannt",
     "trash_done_title": "In den Papierkorb verschoben",
+    "trash_done_recovery": "Die Wiederherstellung übernimmt Ihr Betriebssystem",
     "trash_moved": "{n} Elemente verschoben · {size} zurückgefordert",
     "trash_skipped": "{n} wurde von der Wache übersprungen",
     "export_done": "Export abgeschlossen",

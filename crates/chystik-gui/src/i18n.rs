@@ -318,6 +318,7 @@ pub struct Strings {
     pub privacy_confirm_risky: String,
     // results
     pub trash_done_title: String,
+    pub trash_done_recovery: String,
     pub trash_moved: String,
     pub trash_skipped: String,
     pub export_done: String,

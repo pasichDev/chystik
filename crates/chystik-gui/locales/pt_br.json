@@ -79,6 +79,7 @@
     "age_years": "{n} você",
     "age_unknown": "desconhecido",
     "trash_done_title": "Movido para a Lixeira",
+    "trash_done_recovery": "A recuperação é feita pelo seu sistema operacional",
     "trash_moved": "{n} itens movidos · {size} recuperados",
     "trash_skipped": "{n} ignorado pelo segurança",
     "export_done": "Exportação concluída",

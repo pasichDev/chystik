@@ -79,6 +79,7 @@
     "age_years": "{n} sì",
     "age_unknown": "sconosciuto",
     "trash_done_title": "Spostato nel cestino",
+    "trash_done_recovery": "Il ripristino è gestito dal tuo sistema operativo",
     "trash_moved": "{n} elementi spostati · {size} recuperati",
     "trash_skipped": "{n} saltato dalla guardia di sicurezza",
     "export_done": "Esportazione completata",

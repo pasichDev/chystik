@@ -79,6 +79,7 @@
     "age_years": "{n} р",
     "age_unknown": "невідомо",
     "trash_done_title": "Переміщено в кошик",
+    "trash_done_recovery": "Відновлення забезпечує ваша операційна система",
     "trash_moved": "переміщено {n} · звільнено {size}",
     "trash_skipped": "{n} пропущено захистом",
     "export_done": "Експорт завершено",

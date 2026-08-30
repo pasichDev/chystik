@@ -79,6 +79,7 @@
     "age_years": "{n} oui",
     "age_unknown": "inconnu",
     "trash_done_title": "Déplacé vers la corbeille",
+    "trash_done_recovery": "La récupération est gérée par votre système d'exploitation",
     "trash_moved": "{n} éléments déplacés · {size} récupérés",
     "trash_skipped": "{n} ignoré par l'agent de sécurité",
     "export_done": "Exportation terminée",

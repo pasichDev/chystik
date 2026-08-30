@@ -79,6 +79,7 @@
     "age_years": "{n} e",
     "age_unknown": "bilinmiyor",
     "trash_done_title": "Çöp Kutusu'na taşındı",
+    "trash_done_recovery": "Kurtarma işletim sisteminiz tarafından yönetilir",
     "trash_moved": "{n} öğe taşındı · {size} geri alındı",
     "trash_skipped": "{n} güvenlik görevlisi tarafından atlandı",
     "export_done": "Dışa aktarma tamamlandı",

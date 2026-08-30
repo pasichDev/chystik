@@ -79,6 +79,7 @@
     "age_years": "{n} r",
     "age_unknown": "nieznany",
     "trash_done_title": "Przeniesiono do Kosza",
+    "trash_done_recovery": "Odzyskiwaniem zajmuje się Twój system operacyjny",
     "trash_moved": "Przeniesiono {n} elementów · Odzyskano {size}",
     "trash_skipped": "{n} pominięty przez ochroniarza",
     "export_done": "Eksport zakończony",

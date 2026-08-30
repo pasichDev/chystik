@@ -940,6 +940,11 @@ impl ChystikApp {
             loc.trash_moved.as_str(),
             &[("n", &moved.to_string()), ("size", &format_size(freed))],
         )];
+        // Make the safety contract explicit: nothing was erased, the OS Trash
+        // owns recovery — not a bare "Cleaned".
+        if moved > 0 {
+            info.push(loc.trash_done_recovery.to_string());
+        }
         if skipped > 0 {
             info.push(i18n::fill(
                 loc.trash_skipped.as_str(),

@@ -79,6 +79,7 @@
     "age_years": "{n} a",
     "age_unknown": "desconocido",
     "trash_done_title": "Movido a la papelera",
+    "trash_done_recovery": "La recuperación la gestiona tu sistema operativo",
     "trash_moved": "{n} elementos movidos · {size} recuperados",
     "trash_skipped": "{n} saltado por el guardia de seguridad",
     "export_done": "Exportación completa",

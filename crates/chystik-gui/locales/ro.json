@@ -79,6 +79,7 @@
     "age_years": "{n} a",
     "age_unknown": "necunoscut",
     "trash_done_title": "Mutat în Coșul de gunoi",
+    "trash_done_recovery": "Recuperarea este gestionată de sistemul de operare",
     "trash_moved": "{n} articole mutate · {size} revendicate",
     "trash_skipped": "{n} omis de agentul de siguranță",
     "export_done": "Export finalizat",
