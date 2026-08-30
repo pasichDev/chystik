@@ -273,6 +273,7 @@ fn resolve_root(locator: &RawLocator, context: &RuleContext) -> Option<PathBuf> 
         "home" => Some(context.roots.home_dir.clone()),
         "cache" => Some(context.roots.cache_dir.clone()),
         "local-app-data" => context.roots.local_app_data_dir.clone(),
+        "roaming-app-data" => context.roots.roaming_app_data_dir.clone(),
         "library-caches" => context.roots.library_caches_dir.clone(),
         "developer" => context.roots.developer_dir.clone(),
         "volume-root" => context.roots.volume_root.clone(),
@@ -366,7 +367,7 @@ mod tests {
 
     use tempfile::tempdir;
 
-    const REVIEWED_AT: &str = "2026-08-26";
+    const REVIEWED_AT: &str = "2026-08-30";
 
     fn context(kind: PlatformKind, root: &Path) -> RuleContext {
         RuleContext {
@@ -376,6 +377,7 @@ mod tests {
                 home_dir: root.join("home"),
                 cache_dir: root.join("cache"),
                 local_app_data_dir: Some(root.join("local")),
+                roaming_app_data_dir: Some(root.join("roaming")),
                 library_caches_dir: Some(root.join("Library/Caches")),
                 developer_dir: Some(root.join("Library/Developer")),
                 volume_root: Some(root.join("volume")),
@@ -489,6 +491,90 @@ mod tests {
                 Category::IdeToolchains,
                 Severity::Moderate,
                 FindingPolicy::VendorCommandOnly,
+            ),
+            (
+                "jetbrains.ide-system-dir",
+                Category::IdeToolchains,
+                Severity::Moderate,
+                FindingPolicy::DirectReview,
+            ),
+            (
+                "jetbrains.toolbox-cache",
+                Category::IdeToolchains,
+                Severity::Moderate,
+                FindingPolicy::DirectReview,
+            ),
+            (
+                "google.android-studio-system-dir",
+                Category::IdeToolchains,
+                Severity::Moderate,
+                FindingPolicy::DirectReview,
+            ),
+            (
+                "dart.pub-cache",
+                Category::PackageCaches,
+                Severity::Moderate,
+                FindingPolicy::DirectReview,
+            ),
+            (
+                "windows.crash-dumps",
+                Category::SystemJunk,
+                Severity::Safe,
+                FindingPolicy::DirectReview,
+            ),
+            (
+                "windows.temp",
+                Category::SystemJunk,
+                Severity::Safe,
+                FindingPolicy::AdvisoryOnly,
+            ),
+            (
+                "microsoft.vscode-cache",
+                Category::IdeToolchains,
+                Severity::Safe,
+                FindingPolicy::DirectSafe,
+            ),
+            (
+                "google.chrome-cache",
+                Category::BrowserSystem,
+                Severity::Safe,
+                FindingPolicy::DirectSafe,
+            ),
+            (
+                "perplexity.comet-cache",
+                Category::BrowserSystem,
+                Severity::Safe,
+                FindingPolicy::DirectSafe,
+            ),
+            (
+                "discord.cache",
+                Category::Messengers,
+                Severity::Safe,
+                FindingPolicy::DirectSafe,
+            ),
+            (
+                "notion.cache",
+                Category::OfficeDocs,
+                Severity::Safe,
+                FindingPolicy::DirectSafe,
+            ),
+            (
+                "antigravity.cache",
+                Category::IdeToolchains,
+                Severity::Safe,
+                FindingPolicy::DirectSafe,
+            ),
+            (
+                "epic.webcache",
+                Category::GameLaunchers,
+                Severity::Moderate,
+                FindingPolicy::DirectReview,
+            ),
+            (
+                "valve.steam-htmlcache",
+                Category::GameLaunchers,
+                Severity::Moderate,
+                FindingPolicy::DirectReview,
             ),
         ];
         let mut actual: Vec<_> = catalog_rules()
@@ -747,6 +833,6 @@ mod tests {
             assert!(!rule.preconditions.is_empty());
             assert!(!rule.locator.is_empty());
         }
-        assert_eq!(ids.len(), 15);
+        assert_eq!(ids.len(), 29);
     }
 }

@@ -1,0 +1,45 @@
+# Dart/Flutter pub package cache. Hosted packages are re-downloaded on the
+# next resolve, and globally activated packages are re-activated on demand.
+# Location and the PUB_CACHE override are documented at:
+# https://dart.dev/tools/pub/environment-variables
+
+[[rule]]
+id = "dart.pub-cache"
+category = "package-caches"
+recovery = "rebuild-redownload"
+recovery_note = "pub re-downloads hosted packages and re-activates global packages on the next pub get or run"
+cleanup_policy = "review-required"
+note = "Dart/Flutter pub package cache — re-downloaded by the next pub get"
+source_url = "https://dart.dev/tools/pub/environment-variables"
+reviewed_at = "2026-08-30"
+preconditions = [
+  "the path is the documented pub system cache root",
+  "the path stays inside a Chystik-owned user root",
+]
+
+# Dart 3+ default on Windows.
+[[rule.locator]]
+platform = "windows"
+root = "local-app-data"
+path = "Pub/Cache"
+
+# Pre-Dart-3 fallback on Windows.
+[[rule.locator]]
+platform = "windows"
+root = "roaming-app-data"
+path = "Pub/Cache"
+
+[[rule.locator]]
+platform = "linux"
+root = "home"
+path = ".pub-cache"
+
+[[rule.locator]]
+platform = "macos"
+root = "home"
+path = ".pub-cache"
+
+[[rule.locator]]
+platform = "all"
+root = "environment"
+environment = "PUB_CACHE"

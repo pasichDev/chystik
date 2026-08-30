@@ -1,0 +1,30 @@
+# Android Studio is a JetBrains-platform IDE vendored by Google. Its
+# regenerable "system" directory (caches, indexes, logs) sits under
+# %LOCALAPPDATA%\Google\AndroidStudio<version>, while settings live in the
+# separate roaming config directory. See:
+# https://developer.android.com/studio/intro/studio-config
+
+[[rule]]
+id = "google.android-studio-system-dir"
+category = "ide-toolchains"
+recovery = "rebuild-redownload"
+recovery_note = "Android Studio rebuilds its caches and reindexes projects on the next launch; local history and per-project workspace state in this directory are lost"
+cleanup_policy = "review-required"
+note = "Android Studio system directory for one version — caches and indexes rebuild on the next launch, but local history and per-project workspace state here are lost"
+source_url = "https://developer.android.com/studio/intro/studio-config"
+reviewed_at = "2026-08-30"
+preconditions = [
+  "the directory is an Android Studio version system directory in the local Google vendor folder",
+  "settings and plugins live in the separate roaming config directory and are never touched",
+]
+
+# Match each AndroidStudio<version> directory by its regenerable caches folder.
+# Chrome, the other common tenant of the local Google folder, keeps its cache
+# under a nested profile path and has no top-level caches folder, so this
+# marker leaves it alone.
+[[rule.locator]]
+platform = "windows"
+root = "local-app-data"
+path = "Google"
+matcher = "direct-child-with-markers"
+required_dirs = ["caches"]
