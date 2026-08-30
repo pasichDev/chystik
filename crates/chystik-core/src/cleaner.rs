@@ -203,6 +203,19 @@ fn clean_with_support(
             });
             continue;
         }
+        // Re-run the full guard at the last instant before the destructive
+        // call. If the path turned into a reparse point, a protected location
+        // or something outside the scan root after the first check, it is
+        // refused rather than acted on. This narrows the check-to-act window
+        // as far as a name-based trash API allows; only openat/O_NOFOLLOW plus
+        // removal through a directory descriptor would close it entirely.
+        if guard::check(&path, root).is_err() {
+            outcome.skipped.push(Skipped {
+                path,
+                reason: SkipReason::Refused,
+            });
+            continue;
+        }
         match remover.remove(&path) {
             Ok(()) => {
                 outcome.freed_bytes += item.size_bytes;
@@ -375,6 +388,54 @@ mod tests {
             "the identity guard must not follow a Windows junction"
         );
         std::fs::remove_dir(&junction).expect("remove only the junction, not its target");
+    }
+
+    /// The exact TOCTOU race the flow exists to survive: a directory is
+    /// validated, then the very same path is swapped for a junction pointing
+    /// elsewhere before removal. The identity captured up front must no longer
+    /// match, so the swapped-in reparse point is skipped, never followed.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn identity_rejects_a_path_that_became_a_junction_after_validation() {
+        let root = tempdir().unwrap();
+        let target = root.path().join("cache");
+        std::fs::create_dir_all(&target).unwrap();
+        let captured = FileIdentity::of(&target).expect("a real directory has an identity");
+
+        let elsewhere = root.path().join("victim");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::remove_dir(&target).unwrap();
+        crate::platform::create_test_junction(&target, &elsewhere)
+            .expect("create a junction fixture");
+
+        assert!(
+            !captured.still_matches(&target),
+            "a junction that replaced the validated directory must fail the re-check"
+        );
+        std::fs::remove_dir(&target).expect("remove only the junction, not its target");
+        assert!(elsewhere.exists(), "the junction target must be untouched");
+    }
+
+    /// Same race on Unix: the validated path becomes a symlink to a different
+    /// object before removal. The captured identity must fail closed.
+    #[cfg(unix)]
+    #[test]
+    fn identity_rejects_a_path_that_became_a_symlink_after_validation() {
+        let root = tempdir().unwrap();
+        let target = root.path().join("cache");
+        std::fs::create_dir_all(&target).unwrap();
+        let captured = FileIdentity::of(&target).expect("a real directory has an identity");
+
+        let elsewhere = root.path().join("victim");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::remove_dir(&target).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &target).unwrap();
+
+        assert!(
+            !captured.still_matches(&target),
+            "a symlink that replaced the validated directory must fail the re-check"
+        );
+        assert!(elsewhere.exists(), "the symlink target must be untouched");
     }
 
     /// The whole point of the abstraction: a refused path must never reach
