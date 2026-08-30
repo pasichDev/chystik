@@ -272,9 +272,13 @@ impl ChystikApp {
                 });
             });
 
-            ui.add_space(space(3.5));
-            self.severity_segments_ui(ui);
-            ui.add_space(space(2.5));
+            // No findings yet means nothing to filter — keep the pre-scan
+            // sidebar clean instead of showing a lone "All" tab.
+            if !self.findings.is_empty() {
+                ui.add_space(space(3.5));
+                self.severity_segments_ui(ui);
+                ui.add_space(space(2.5));
+            }
 
             let selected = self.category_filter;
             let mut clicked: Option<CategoryFilter> = None;
