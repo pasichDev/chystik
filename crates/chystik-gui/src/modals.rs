@@ -466,7 +466,7 @@ impl ChystikApp {
                                         "mono_sm",
                                         if *passed { COL_TEXT } else { COL_TEXT3 },
                                     ))
-                                    .on_hover_text(path.display().to_string());
+                                    .on_hover_text(display_path(path));
                                     severity_pill(ui, *sev, lang);
                                     ui.end_row();
                                 }
@@ -638,11 +638,11 @@ impl ChystikApp {
                             for path in self.exclusions.clone() {
                                 ui.horizontal(|ui| {
                                     ui.label(txt(
-                                        truncate_middle(&path.display().to_string(), 52),
+                                        truncate_middle(&display_path(&path), 52),
                                         "mono_sm",
                                         COL_TEXT,
                                     ))
-                                    .on_hover_text(path.display().to_string());
+                                    .on_hover_text(display_path(&path));
                                     ui.with_layout(
                                         egui::Layout::right_to_left(egui::Align::Center),
                                         |ui| {

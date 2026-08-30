@@ -254,6 +254,11 @@ impl ChystikApp {
                             (buckets.moderate_bytes, Severity::Moderate),
                             (buckets.risky_bytes, Severity::Risky),
                         ] {
+                            // A zero bucket is noise — show only the classes
+                            // that actually have reclaimable bytes.
+                            if bytes == 0 {
+                                continue;
+                            }
                             paint_severity_glyph(ui, sev, 8.0, severity_color(sev));
                             ui.label(txt(format_size(bytes), "caption", COL_TEXT2))
                                 .on_hover_text(format!(
@@ -352,43 +357,51 @@ impl ChystikApp {
             ),
         ];
 
-        const GAP: f32 = 6.0;
-        let cell = (SIDEBAR_W - SIDEBAR_PAD * 2.0 - GAP) / 2.0;
+        const GAP: f32 = 5.0;
+        let full_w = SIDEBAR_W - SIDEBAR_PAD * 2.0;
         let mut chosen: Option<SeverityFilter> = None;
 
         egui::Frame::none()
             .inner_margin(egui::Margin::symmetric(SIDEBAR_PAD, 0.0))
             .show(ui, |ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(GAP, GAP);
-                egui::Grid::new("severity_segments")
-                    .num_columns(2)
-                    .spacing(egui::vec2(GAP, GAP))
-                    .show(ui, |ui| {
-                        for (i, (value, label, color, hint)) in options.into_iter().enumerate() {
-                            let active = self.severity_filter == value;
-                            let (fill, stroke, fg) = if active {
-                                (COL_ACCENT_SOFT, COL_ACCENT, COL_TEXT)
-                            } else {
-                                (egui::Color32::TRANSPARENT, COL_LINE, color)
-                            };
-                            if ui
-                                .add(
-                                    egui::Button::new(txt(label, "micro", fg))
-                                        .fill(fill)
-                                        .stroke(egui::Stroke::new(1.0_f32, stroke))
-                                        .rounding(egui::Rounding::same(R_MD))
-                                        .min_size(egui::vec2(cell, space(6.5))),
-                                )
-                                .on_hover_text(hint)
-                                .clicked()
-                            {
-                                chosen = Some(value);
-                            }
-                            if i % 2 == 1 {
-                                ui.end_row();
-                            }
-                        }
-                    });
+                ui.spacing_mut().item_spacing = egui::vec2(0.0, GAP);
+                let micro = ui
+                    .style()
+                    .text_styles
+                    .get(&ts("micro"))
+                    .cloned()
+                    .unwrap_or_default();
+                // One thin full-width button per row, label aligned to the
+                // start. A full-width column fits every label on one line in any
+                // locale, so nothing can stretch the sidebar the way the old
+                // 2x2 grid did.
+                for (value, label, color, hint) in options {
+                    let active = self.severity_filter == value;
+                    let (fill, stroke, fg) = if active {
+                        (COL_ACCENT_SOFT, COL_ACCENT, COL_TEXT)
+                    } else {
+                        (egui::Color32::TRANSPARENT, COL_LINE, color)
+                    };
+                    let (rect, resp) = ui
+                        .allocate_exact_size(egui::vec2(full_w, space(5.5)), egui::Sense::click());
+                    let painter = ui.painter();
+                    painter.rect(
+                        rect,
+                        egui::Rounding::same(R_MD),
+                        fill,
+                        egui::Stroke::new(1.0_f32, stroke),
+                    );
+                    painter.text(
+                        egui::pos2(rect.left() + space(2.5), rect.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        label,
+                        micro.clone(),
+                        fg,
+                    );
+                    if resp.on_hover_text(hint).clicked() {
+                        chosen = Some(value);
+                    }
+                }
             });
 
         if let Some(value) = chosen {
@@ -540,7 +553,9 @@ impl ChystikApp {
         let mut copied_advice_request = None;
 
         if rows.is_empty() {
-            ui.add_space(space(14.0));
+            let pre_scan = !scanning && findings.is_empty();
+            ui.add_space(space(if pre_scan { 20.0 } else { 14.0 }));
+            let mut scan_clicked = false;
             ui.vertical_centered(|ui| {
                 let (title, body) = if scanning {
                     (s.scanning_title.as_str(), s.scanning_body.as_str())
@@ -552,11 +567,37 @@ impl ChystikApp {
                         s.empty_filtered_body.as_str(),
                     )
                 };
-                ui.label(txt(title, "title", COL_TEXT2));
-                ui.add_space(space(1.5));
+                ui.label(txt(title, "display", COL_TEXT));
+                ui.add_space(space(2.0));
                 ui.set_max_width(420.0);
                 ui.label(txt(body, "caption", COL_TEXT3));
+                // Prominent green call to action on the pre-scan empty screen.
+                if pre_scan {
+                    ui.add_space(space(6.0));
+                    let enabled = self.roots_nonempty;
+                    let resp = ui.add_enabled(
+                        enabled,
+                        egui::Button::new(txt(
+                            s.scan.as_str(),
+                            "title",
+                            if enabled { COL_ACCENT_FG } else { COL_TEXT3 },
+                        ))
+                        .fill(if enabled {
+                            severity_color(Severity::Safe)
+                        } else {
+                            COL_RAISED
+                        })
+                        .rounding(egui::Rounding::same(R_MD))
+                        .min_size(egui::vec2(space(44.0), space(12.0))),
+                    );
+                    if resp.clicked() {
+                        scan_clicked = true;
+                    }
+                }
             });
+            if scan_clicked {
+                self.start_scan();
+            }
             return;
         }
 
@@ -674,7 +715,7 @@ impl ChystikApp {
                             });
 
                             row.col(|ui| {
-                                let full = finding.path.display().to_string();
+                                let full = display_path(&finding.path);
                                 // Dim the directory prefix so the eye lands
                                 // on the last component, which is what
                                 // identifies the item.
@@ -834,34 +875,57 @@ impl ChystikApp {
         let busy = self.scanning();
         let totals = self.view.cleanup_totals;
 
+        // Every selectable row in the current category view — what "Select all"
+        // ticks. Advisory/manual rows are not actionable and stay out, and an
+        // excluded path is never offered.
+        let all_actionable: Vec<usize> = self
+            .view
+            .rows
+            .iter()
+            .copied()
+            .filter(|i| {
+                self.findings[*i].is_actionable()
+                    && !crate::exclusions::is_excluded(&self.findings[*i].path, &self.exclusions)
+            })
+            .collect();
+
         ui.horizontal_wrapped(|ui| {
             if sel_count == 0 {
-                for (label, count, bytes, color) in [
+                for (label, count, bytes, color, always) in [
                     (
                         s.totals_found.as_str(),
                         totals.found_count,
                         totals.found_bytes,
                         COL_TEXT3,
+                        true,
                     ),
                     (
                         s.totals_auto_cleanable.as_str(),
                         totals.auto_cleanable_count,
                         totals.auto_cleanable_bytes,
                         severity_color(Severity::Safe),
+                        false,
                     ),
                     (
                         s.totals_review_required.as_str(),
                         totals.review_required_count,
                         totals.review_required_bytes,
                         severity_color(Severity::Moderate),
+                        false,
                     ),
                     (
                         s.totals_manual_valuable.as_str(),
                         totals.manual_count,
                         totals.manual_bytes,
                         severity_color(Severity::Risky),
+                        false,
                     ),
                 ] {
+                    // Keep the grand total always; drop a recovery class that
+                    // has nothing in it rather than printing "0 · 0 B".
+                    if count == 0 && !always {
+                        continue;
+                    }
                     ui.label(txt(
                         i18n::fill(
                             label,
@@ -913,15 +977,16 @@ impl ChystikApp {
                 {
                     self.selected.clear();
                 }
-                if !self.disks.is_empty() {
-                    let summary = self
-                        .disks
-                        .iter()
-                        .map(|d| format!("{}  {}", d.mount_point.display(), disk_usage_label(d)))
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    ui.label(txt(s.disks.as_str(), "caption", COL_TEXT3))
-                        .on_hover_text(format!("{}\n\n{}", s.disks_hint.as_str(), summary));
+                // Select every selectable row in the current category. Disabled
+                // once they are all ticked (use Clear to undo) or when scanning.
+                let can_select_all = !busy
+                    && !all_actionable.is_empty()
+                    && !all_actionable.iter().all(|i| self.selected.contains(i));
+                if ghost_button(ui, s.select_all.as_str(), can_select_all)
+                    .on_hover_text(s.select_all_hint.as_str())
+                    .clicked()
+                {
+                    self.selected.extend(all_actionable.iter().copied());
                 }
             });
         });
@@ -1277,7 +1342,7 @@ impl ChystikApp {
 fn finding_tooltip(lang: i18n::Lang, finding: &chystik_core::model::Finding) -> String {
     let strings = i18n::strings(lang);
     let mut lines = vec![
-        finding.path.display().to_string(),
+        display_path(&finding.path),
         finding.note.clone(),
         format!(
             "{}: {} — {}",
@@ -1346,7 +1411,7 @@ fn usage_bar(ui: &mut egui::Ui, fraction: f32, width: f32, color: egui::Color32)
 
 /// The platform home directory collapsed to `~`, which is how paths are recognised.
 fn short_home_path(path: &std::path::Path) -> String {
-    let full = path.display().to_string();
+    let full = display_path(path);
     let home = chystik_core::platform::current().app_paths().home_dir;
     full.strip_prefix(&home.to_string_lossy().into_owned())
         .map(|tail| format!("~{tail}"))

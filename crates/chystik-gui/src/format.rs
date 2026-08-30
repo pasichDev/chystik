@@ -66,14 +66,6 @@ pub(crate) fn capacity_summary(disks: &[StorageVolume]) -> String {
     )
 }
 
-/// `used / total` usage pair for one volume chip.
-pub(crate) fn disk_usage_label(d: &StorageVolume) -> String {
-    format!(
-        "{} / {}",
-        format_size(d.total_bytes.saturating_sub(d.free_bytes)),
-        format_size(d.total_bytes)
-    )
-}
 
 /// Middle-truncate a string with an ellipsis, keeping head and tail visible.
 pub(crate) fn truncate_middle(s: &str, max_chars: usize) -> String {
@@ -85,6 +77,30 @@ pub(crate) fn truncate_middle(s: &str, max_chars: usize) -> String {
     let head: String = chars[..half].iter().collect();
     let tail: String = chars[chars.len() - half..].iter().collect();
     format!("{head}\u{2026}{tail}")
+}
+
+/// User-facing rendering of a filesystem path.
+///
+/// On Windows `std::fs::canonicalize` yields a verbatim `\\?\C:\…` path, and
+/// findings are stored in that form so deep (>260-char) paths keep working
+/// during the walk and cleanup. That prefix is noise to a human — and it also
+/// defeats the `~`-home collapse below, since the verbatim spelling no longer
+/// prefix-matches the plain home dir. Strip it for display only; never for
+/// filesystem use.
+pub(crate) fn display_path(path: &std::path::Path) -> String {
+    strip_verbatim_prefix(&path.display().to_string())
+}
+
+/// Remove the Windows verbatim `\\?\` (or `\\?\UNC\`) prefix. A no-op on every
+/// path that lacks it, so it is safe to call on any platform.
+fn strip_verbatim_prefix(text: &str) -> String {
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = text.strip_prefix(r"\\?\") {
+        rest.to_string()
+    } else {
+        text.to_string()
+    }
 }
 
 /// Split an absolute path into a dimmable directory prefix and the final
@@ -182,6 +198,23 @@ mod tests {
     }
 
     #[test]
+    fn display_path_strips_the_windows_verbatim_prefix() {
+        use std::path::Path;
+        // The prefix findings carry on Windows is noise for a human.
+        assert_eq!(
+            display_path(Path::new(r"\\?\C:\Users\me\proj\.dart_tool")),
+            r"C:\Users\me\proj\.dart_tool"
+        );
+        // UNC verbatim paths collapse back to their `\\server\share` spelling.
+        assert_eq!(
+            display_path(Path::new(r"\\?\UNC\server\share\cache")),
+            r"\\server\share\cache"
+        );
+        // Anything without the prefix is returned unchanged, on any platform.
+        assert_eq!(display_path(Path::new("/home/me/.cache")), "/home/me/.cache");
+    }
+
+    #[test]
     fn path_tail_joins_last_components() {
         assert_eq!(
             path_tail(std::path::Path::new("/home/u/.ollama/models"), 2),
@@ -195,13 +228,5 @@ mod tests {
         let disks = vec![disk("/", 500, 100), disk("/media/ext", 300, 300)];
         assert_eq!(capacity_summary(&disks), "\u{3a3} 800 B \u{b7} 400 B free");
         assert_eq!(capacity_summary(&[]), "\u{3a3} 0 B \u{b7} 0 B free");
-    }
-
-    #[test]
-    fn disk_usage_label_shows_used_over_total() {
-        let d = disk("/mnt/data", 3 * GB, GB);
-        assert_eq!(disk_usage_label(&d), "2.0 GB / 3.0 GB");
-        let tiny = disk("/scratch", 512, 512);
-        assert_eq!(disk_usage_label(&tiny), "0 B / 512 B");
     }
 }

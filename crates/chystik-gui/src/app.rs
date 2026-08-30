@@ -29,6 +29,12 @@ pub(crate) struct ChystikApp {
     pub(crate) disks: Vec<StorageVolume>,
     /// Scan targets offered in the Targets popover.
     pub(crate) targets: Vec<ScanTarget>,
+    /// Canonical roots the last scan actually walked, captured from the scan
+    /// summary. Findings are stored in this same canonical form (on Windows a
+    /// verbatim `\\?\` path), so guard/owning-root checks must anchor on these
+    /// — not on the raw `targets`, whose spelling can differ and would fail a
+    /// `Path::starts_with` match across the verbatim boundary.
+    pub(crate) scan_roots: Vec<PathBuf>,
 
     pub(crate) state: ScanState,
     pub(crate) rx: Receiver<AppScanEvent>,
@@ -126,6 +132,7 @@ impl Default for ChystikApp {
             lang: i18n::detect(),
             disks: Vec::new(),
             targets: Vec::new(),
+            scan_roots: Vec::new(),
             state: ScanState::Idle,
             rx,
             findings: Vec::new(),
@@ -443,10 +450,21 @@ impl ChystikApp {
         self.roots_sig = sig;
     }
 
-    /// Longest configured target containing `path`; anchors guard checks
-    /// when several targets overlap.
+    /// Longest scan root containing `path`; anchors guard checks when several
+    /// targets overlap.
+    ///
+    /// Findings are stored in the canonical form the scan walked (on Windows a
+    /// verbatim `\\?\` path). Match them against `scan_roots`, captured in that
+    /// same form, rather than the raw `targets`: a target spelled `C:\x` never
+    /// prefix-matches a `\\?\C:\x` finding, which made the confirm dialog mark
+    /// every item "refused". `effective_roots` is the fallback only when no
+    /// scan has recorded its roots yet.
     pub(crate) fn owning_root(&self, path: &Path) -> Option<PathBuf> {
-        let roots = self.effective_roots();
+        let roots = if self.scan_roots.is_empty() {
+            self.effective_roots()
+        } else {
+            self.scan_roots.clone()
+        };
         chystik_core::app::owning_root(&roots, path).map(Path::to_path_buf)
     }
 }
@@ -639,6 +657,7 @@ impl ChystikApp {
 
     pub(crate) fn reset_results(&mut self) {
         self.findings.clear();
+        self.scan_roots.clear();
         self.selected.clear();
         self.deleted.clear();
         self.dir_count = 0;
@@ -729,6 +748,11 @@ impl ChystikApp {
                     AppScanEvent::Started { root } => {
                         self.progress_text =
                             format!("{} {}\u{2026}", s.scanning_target.as_str(), root.display());
+                        // Capture the canonical root now so a cancelled scan
+                        // still resolves the findings it did collect.
+                        if !self.scan_roots.contains(&root) {
+                            self.scan_roots.push(root);
+                        }
                     }
                     AppScanEvent::DirectoriesScanned { count } => {
                         self.dir_count = count.max(self.dir_count);
@@ -737,7 +761,11 @@ impl ChystikApp {
                         self.live_bytes += finding.size_bytes;
                         self.findings.push(*finding);
                     }
-                    AppScanEvent::Finished(_) => {
+                    AppScanEvent::Finished(summary) => {
+                        // The canonical roots that produced these findings.
+                        // owning_root/guard checks anchor on these, not the
+                        // raw targets whose spelling may differ.
+                        self.scan_roots = summary.roots;
                         self.view_stamp = None;
                         self.dir_count = 0;
                         self.refresh_disks(); // free space moved during the walk
@@ -887,7 +915,7 @@ impl ChystikApp {
         }
         skipped += outcome.skipped_count();
         for skip in &outcome.skipped {
-            let path = truncate_middle(&skip.path.display().to_string(), 48);
+            let path = truncate_middle(&display_path(&skip.path), 48);
             let detail = match &skip.reason {
                 SkipReason::OutsideEveryTarget => "outside every scan target".to_owned(),
                 SkipReason::Refused => "refused by the safety guard".to_owned(),
@@ -896,7 +924,7 @@ impl ChystikApp {
                 SkipReason::ChangedUnderUs => "changed on disk during the operation".to_owned(),
                 SkipReason::RemoverFailed(e) => e.clone(),
             };
-            eprintln!("[chystik] skipped {}: {detail}", skip.path.display());
+            eprintln!("[chystik] skipped {}: {detail}", display_path(&skip.path));
             errors.push(format!("{path}: {detail}"));
         }
         let (moved, freed) = (outcome.removed_count(), outcome.freed_bytes);
@@ -951,6 +979,50 @@ mod tests {
             advice: None,
             provenance: None,
         }
+    }
+
+    #[test]
+    fn owning_root_resolves_findings_against_the_canonical_scan_roots() {
+        // Findings are stored in the scan's canonical root form. owning_root
+        // must consult scan_roots, not the raw targets — otherwise the confirm
+        // dialog marks every item "refused" because the raw target spelling
+        // fails a starts_with match against the canonical finding path.
+        let root = PathBuf::from(if cfg!(windows) {
+            r"\\?\C:\scanroot"
+        } else {
+            "/scanroot"
+        });
+        let item = root.join("proj").join(".dart_tool");
+        let mut app = app_with(vec![]);
+        // No raw targets configured; only the canonical scan roots are known.
+        app.scan_roots = vec![root.clone()];
+        assert_eq!(app.owning_root(&item).as_deref(), Some(root.as_path()));
+    }
+
+    /// Reproduces the Windows bug directly: findings carry the verbatim `\\?\`
+    /// root from `canonicalize`, while the raw target keeps the plain `C:\`
+    /// spelling. The plain target fails `starts_with` on the verbatim finding,
+    /// so the guard used to refuse everything. `scan_roots` holds the verbatim
+    /// form and bridges the gap.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn owning_root_bridges_the_verbatim_prefix_gap() {
+        let verbatim = PathBuf::from(r"\\?\C:\scanroot");
+        let item = verbatim.join("proj").join("node_modules");
+        let mut app = app_with(vec![]);
+        app.targets = vec![ScanTarget {
+            root: PathBuf::from(r"C:\scanroot"),
+            label: String::new(),
+            enabled: true,
+            user_added: true,
+        }];
+        assert_eq!(
+            chystik_core::app::owning_root(&app.effective_roots(), &item),
+            None,
+            "verbatim finding must not match the plain target — that is the bug"
+        );
+        app.scan_roots = vec![verbatim.clone()];
+        assert_eq!(app.owning_root(&item).as_deref(), Some(verbatim.as_path()));
     }
 
     #[test]
