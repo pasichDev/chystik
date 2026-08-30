@@ -43,3 +43,37 @@ path = ".pub-cache"
 platform = "all"
 root = "environment"
 environment = "PUB_CACHE"
+
+# Dart Analysis Server cache/instrumentation state. The analysis server
+# recreates it on the next launch; clearing it is the documented remedy for a
+# stale analyzer. dart.dev names the Windows location as the server's cache dir:
+# https://dart.dev/tools/analyzer-performance
+[[rule]]
+id = "dart.analysis-server-cache"
+category = "ide-toolchains"
+recovery = "automatic"
+recovery_note = "the Dart Analysis Server rebuilds its driver cache and instrumentation state on the next launch"
+cleanup_policy = "auto-cleanable"
+note = "Dart Analysis Server cache (.dartServer) — rebuilt on the next analyzer launch"
+source_url = "https://dart.dev/tools/analyzer-performance"
+reviewed_at = "2026-08-30"
+preconditions = [
+  "the path is the documented .dartServer analysis-server cache directory",
+  "the path stays inside a Chystik-owned user root",
+]
+
+# Dart 3+ on Windows keeps .dartServer under %LOCALAPPDATA%.
+[[rule.locator]]
+platform = "windows"
+root = "local-app-data"
+path = ".dartServer"
+
+[[rule.locator]]
+platform = "linux"
+root = "home"
+path = ".dartServer"
+
+[[rule.locator]]
+platform = "macos"
+root = "home"
+path = ".dartServer"

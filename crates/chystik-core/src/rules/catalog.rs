@@ -576,6 +576,18 @@ mod tests {
                 Severity::Moderate,
                 FindingPolicy::DirectReview,
             ),
+            (
+                "dart.analysis-server-cache",
+                Category::IdeToolchains,
+                Severity::Safe,
+                FindingPolicy::DirectSafe,
+            ),
+            (
+                "huggingface.hub-cache",
+                Category::AiModels,
+                Severity::Moderate,
+                FindingPolicy::DirectReview,
+            ),
         ];
         let mut actual: Vec<_> = catalog_rules()
             .iter()
@@ -833,6 +845,6 @@ mod tests {
             assert!(!rule.preconditions.is_empty());
             assert!(!rule.locator.is_empty());
         }
-        assert_eq!(ids.len(), 29);
+        assert_eq!(ids.len(), 31);
     }
 }
