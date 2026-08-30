@@ -330,32 +330,55 @@ impl ChystikApp {
     /// which is what made it wrap in the first place.
     pub(crate) fn severity_segments_ui(&mut self, ui: &mut egui::Ui) {
         let (lang, s) = (self.lang, self.s());
-        let options = [
-            (
-                SeverityFilter::All,
-                s.filter_all.as_str(),
-                COL_TEXT,
-                s.filter_all_hint.as_str(),
-            ),
-            (
+
+        // Only offer a recovery-class filter that actually has findings — an
+        // empty Automatic/Rebuild/Manual tab is just noise. "All" always shows.
+        let safe_present = self.view.cat_stats.iter().any(|c| c.safe_bytes > 0);
+        let moderate_present = self.view.cat_stats.iter().any(|c| c.moderate_bytes > 0);
+        let risky_present = self.view.cat_stats.iter().any(|c| c.risky_bytes > 0);
+
+        // A filter whose class just disappeared would strand the table on an
+        // empty view, so fall back to All.
+        let active_present = match self.severity_filter {
+            SeverityFilter::All => true,
+            SeverityFilter::One(Severity::Safe) => safe_present,
+            SeverityFilter::One(Severity::Moderate) => moderate_present,
+            SeverityFilter::One(Severity::Risky) => risky_present,
+        };
+        if !active_present {
+            self.severity_filter = SeverityFilter::All;
+        }
+
+        let mut options: Vec<(SeverityFilter, &str, egui::Color32, &str)> = vec![(
+            SeverityFilter::All,
+            s.filter_all.as_str(),
+            COL_TEXT,
+            s.filter_all_hint.as_str(),
+        )];
+        if safe_present {
+            options.push((
                 SeverityFilter::One(Severity::Safe),
                 i18n::severity_label(lang, Severity::Safe),
                 severity_color(Severity::Safe),
                 s.filter_safe_hint.as_str(),
-            ),
-            (
+            ));
+        }
+        if moderate_present {
+            options.push((
                 SeverityFilter::One(Severity::Moderate),
                 s.filter_review.as_str(),
                 severity_color(Severity::Moderate),
                 s.filter_review_hint.as_str(),
-            ),
-            (
+            ));
+        }
+        if risky_present {
+            options.push((
                 SeverityFilter::One(Severity::Risky),
                 i18n::severity_label(lang, Severity::Risky),
                 severity_color(Severity::Risky),
                 s.filter_risky_hint.as_str(),
-            ),
-        ];
+            ));
+        }
 
         const GAP: f32 = 5.0;
         let full_w = SIDEBAR_W - SIDEBAR_PAD * 2.0;
