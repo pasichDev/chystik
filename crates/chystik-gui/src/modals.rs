@@ -752,8 +752,16 @@ impl ChystikApp {
         }
     }
 
-    pub(crate) fn show_notice_modal(&mut self, ctx: &egui::Context, notice: &Notice) {
+    pub(crate) fn show_notice_modal(&mut self, ctx: &egui::Context, notice: Notice) {
         let mut close = false;
+        // 300 ms, once: the clock lives on the notice, not on a frame
+        // counter, so it cannot restart just because something else in the
+        // window repainted.
+        let anim_t = (notice.shown_at.elapsed().as_secs_f32() / 0.3).clamp(0.0, 1.0);
+        if anim_t < 1.0 {
+            ctx.request_repaint();
+        }
+
         dim_backdrop(ctx, "notice_backdrop");
         egui::Window::new("notice")
             .title_bar(false)
@@ -769,7 +777,15 @@ impl ChystikApp {
             )
             .show(ctx, |ui| {
                 ui.set_min_width(440.0);
-                ui.label(txt(&notice.title, "title", COL_TEXT));
+                if notice.success {
+                    ui.horizontal(|ui| {
+                        paint_success_check(ui, 28.0, severity_color(Severity::Safe), anim_t);
+                        ui.add_space(space(2.0));
+                        ui.label(txt(&notice.title, "title", COL_TEXT));
+                    });
+                } else {
+                    ui.label(txt(&notice.title, "title", COL_TEXT));
+                }
                 ui.add_space(space(2.0));
                 for line in &notice.lines {
                     ui.label(txt(line, "caption", COL_TEXT2));
@@ -785,7 +801,79 @@ impl ChystikApp {
             || ctx.input(|i| i.key_pressed(egui::Key::Escape) || i.key_pressed(egui::Key::Enter))
         {
             self.notice = None;
+        } else {
+            // Not dismissed: this frame's `take()` must not lose it.
+            self.notice = Some(notice);
         }
+    }
+
+    /// Cleanup in progress: current item, a bar, and a running count.
+    /// No cancel — the same manifest already confirmed everything in the
+    /// batch, and the safety guard still runs per item underneath this.
+    pub(crate) fn show_clean_progress(&mut self, ctx: &egui::Context) {
+        let s = self.s();
+        let crate::state::CleanState::Running { progress, .. } = &self.clean else {
+            return;
+        };
+        let done = progress.done;
+        let total = progress.total;
+        let freed = progress.freed_bytes;
+        let total_bytes = progress.total_bytes;
+        let fraction = progress.fraction();
+        let current = progress
+            .current
+            .as_ref()
+            .map(|p| truncate_middle(&display_path(p), 56));
+
+        ctx.request_repaint(); // an active worker always has more to show
+
+        dim_backdrop(ctx, "clean_progress_backdrop");
+        egui::Window::new("clean_progress")
+            .title_bar(false)
+            .id(egui::Id::new("clean_progress_window"))
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .order(egui::Order::Tooltip)
+            .resizable(false)
+            .collapsible(false)
+            .frame(
+                egui::Frame::window(&ctx.style())
+                    .fill(COL_RAISED)
+                    .inner_margin(egui::Margin::same(space(6.0))),
+            )
+            .show(ctx, |ui| {
+                ui.set_width(440.0);
+                ui.label(txt(s.trash_progress_title.as_str(), "title", COL_TEXT));
+                ui.add_space(space(2.0));
+                ui.label(txt(
+                    i18n::fill(
+                        s.trash_progress_count.as_str(),
+                        &[
+                            ("done", &done.to_string()),
+                            ("n", &total.to_string()),
+                            (
+                                "size",
+                                &format!("{} / {}", format_size(freed), format_size(total_bytes)),
+                            ),
+                        ],
+                    ),
+                    "caption",
+                    COL_TEXT2,
+                ));
+                ui.add_space(space(3.0));
+                ui.add(
+                    egui::ProgressBar::new(fraction)
+                        .fill(COL_ACCENT)
+                        .rounding(egui::Rounding::same(R_SM)),
+                );
+                ui.add_space(space(2.0));
+                if let Some(current) = current {
+                    ui.label(txt(current, "mono_sm", COL_TEXT3));
+                } else {
+                    // Reserve the line's height so the window doesn't jump
+                    // between "no current item yet" and the first one.
+                    ui.label(txt(" ", "mono_sm", COL_TEXT3));
+                }
+            });
     }
 }
 

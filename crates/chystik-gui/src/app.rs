@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use eframe::egui;
 
 use chystik_core::app::AppScanEvent;
+use chystik_core::cleaner;
 use chystik_core::model::{Category, Finding};
 use chystik_core::platform::{self, StorageVolume};
 
@@ -38,6 +39,10 @@ pub(crate) struct ChystikApp {
 
     pub(crate) state: ScanState,
     pub(crate) rx: Receiver<AppScanEvent>,
+
+    /// Deletion lifecycle. Cleaning runs on its own thread so the window
+    /// keeps painting while a large batch moves to the trash.
+    pub(crate) clean: CleanState,
 
     pub(crate) findings: Vec<Finding>,
     /// Indices into `self.findings` currently ticked by the user.
@@ -106,6 +111,31 @@ pub(crate) struct ChystikApp {
 pub(crate) struct Notice {
     pub(crate) title: String,
     pub(crate) lines: Vec<String>,
+    /// Draws the confirming check-mark. Set only when the operation
+    /// actually did what it says — a run that moved nothing is not a
+    /// success, however cleanly it failed.
+    pub(crate) success: bool,
+    /// When the notice first appeared, so the mark animates exactly once
+    /// instead of restarting on every repaint.
+    pub(crate) shown_at: Instant,
+}
+
+impl Notice {
+    pub(crate) fn info(title: impl Into<String>, lines: Vec<String>) -> Self {
+        Self {
+            title: title.into(),
+            lines,
+            success: false,
+            shown_at: Instant::now(),
+        }
+    }
+
+    pub(crate) fn success(title: impl Into<String>, lines: Vec<String>) -> Self {
+        Self {
+            success: true,
+            ..Self::info(title, lines)
+        }
+    }
 }
 
 const FOOTER_ACTION_HEIGHT: f32 = space(8.0);
@@ -135,6 +165,7 @@ impl Default for ChystikApp {
             scan_roots: Vec::new(),
             state: ScanState::Idle,
             rx,
+            clean: CleanState::Idle,
             findings: Vec::new(),
             selected: HashSet::new(),
             deleted: HashSet::new(),
@@ -176,6 +207,16 @@ impl ChystikApp {
         matches!(self.state, ScanState::Scanning { .. })
     }
 
+    pub(crate) fn cleaning(&self) -> bool {
+        matches!(self.clean, CleanState::Running { .. })
+    }
+
+    /// True while any worker owns the model: neither a scan nor a second
+    /// cleanup may start, and no row may be re-submitted for deletion.
+    pub(crate) fn busy(&self) -> bool {
+        self.scanning() || self.cleaning()
+    }
+
     pub(crate) fn cleanup_available(&self) -> bool {
         platform::current().cleanup_support().is_available()
     }
@@ -210,7 +251,7 @@ impl ChystikApp {
     /// Send the ticked privacy traces to the trash, through the same
     /// validated flow the cleaner uses.
     pub(crate) fn clear_selected_traces(&mut self) {
-        use chystik_core::cleaner::{self, CleanupItem};
+        use chystik_core::cleaner::CleanupItem;
 
         let items: Vec<CleanupItem> = self
             .traces_selected
@@ -228,27 +269,7 @@ impl ChystikApp {
         if items.is_empty() {
             return;
         }
-        let outcome = cleaner::clean(&items, &cleaner::SystemTrash);
-        let loc = self.s();
-        let mut lines = vec![i18n::fill(
-            loc.trash_moved.as_str(),
-            &[
-                ("n", &outcome.removed_count().to_string()),
-                ("size", &format_size(outcome.freed_bytes)),
-            ],
-        )];
-        if outcome.skipped_count() > 0 {
-            lines.push(i18n::fill(
-                loc.trash_skipped.as_str(),
-                &[("n", &outcome.skipped_count().to_string())],
-            ));
-        }
-        self.notice = Some(Notice {
-            title: loc.trash_done_title.clone(),
-            lines,
-        });
-        self.traces = chystik_core::privacy::probe();
-        self.traces_selected.clear();
+        self.start_clean(CleanScope::Traces, items, 0);
     }
 
     /// Localised interface strings for the active language.
@@ -291,7 +312,7 @@ impl ChystikApp {
     pub(crate) fn rebuild_view(&mut self) {
         let lowered = self.search.trim().to_lowercase();
         let needle = (!lowered.is_empty()).then_some(lowered);
-        let mut rows: Vec<usize> = Vec::with_capacity(self.findings.len());
+        let mut all_rows: Vec<usize> = Vec::with_capacity(self.findings.len());
         let mut cleanup_totals = CleanupTotals::default();
         let mut stats: HashMap<Category, CatStat> = HashMap::new();
         let (mut all_bytes, mut all_count) = (0u64, 0usize);
@@ -323,18 +344,86 @@ impl ChystikApp {
                 continue;
             }
             cleanup_totals.add(f);
-            rows.push(i);
+            all_rows.push(i);
         }
         let mut cat_stats: Vec<CatStat> = stats.into_values().collect();
         cat_stats.sort_by_key(|c| std::cmp::Reverse(c.bytes));
+
+        // Several superseded builds of the same tool collapse into one row:
+        // real siblings of a `GroupRule`'s versioned store, tagged by the
+        // scanner via `Finding::version_group`. Below two members this adds
+        // nothing over just showing the row, so it stays a normal single.
+        let mut group_members: HashMap<PathBuf, Vec<usize>> = HashMap::new();
+        for &i in &all_rows {
+            if let Some(dir) = &self.findings[i].version_group {
+                group_members.entry(dir.clone()).or_default().push(i);
+            }
+        }
+        let mut version_groups: Vec<VersionGroup> = Vec::new();
+        let mut grouped: HashSet<usize> = HashSet::new();
+        for (dir, mut members) in group_members {
+            if members.len() < 2 {
+                continue;
+            }
+            members.sort_by(|&a, &b| self.findings[b].last_used.cmp(&self.findings[a].last_used));
+            let total_bytes = members.iter().map(|&i| self.findings[i].size_bytes).sum();
+            let note = self.findings[members[0]].note.clone();
+            let severity = self.findings[members[0]].severity;
+            let app_name = friendly_app_name(&note, &dir);
+            grouped.extend(members.iter().copied());
+            version_groups.push(VersionGroup {
+                dir,
+                app_name,
+                note,
+                members,
+                total_bytes,
+                severity,
+            });
+        }
+        version_groups.sort_by_key(|g| std::cmp::Reverse(g.total_bytes));
+
         let (col, asc) = (self.sort_col, self.sort_asc);
-        rows.sort_by(|&a, &b| {
-            let (x, y) = (&self.findings[a], &self.findings[b]);
+        let findings = &self.findings;
+        let key_of = |r: &RowRef| -> (&Path, u64, u8, Option<chrono::DateTime<chrono::Utc>>) {
+            match *r {
+                RowRef::Single(i) => {
+                    let f = &findings[i];
+                    (
+                        f.path.as_path(),
+                        f.size_bytes,
+                        severity_rank(f.severity),
+                        f.last_used,
+                    )
+                }
+                RowRef::Group(gi) => {
+                    let g = &version_groups[gi];
+                    // The oldest member — `members` is newest-first — is
+                    // exactly what the Age column shows for this row; the
+                    // sort key must agree with it.
+                    let oldest = *g.members.last().expect("a group always has 2+ members");
+                    (
+                        g.dir.as_path(),
+                        g.total_bytes,
+                        severity_rank(g.severity),
+                        findings[oldest].last_used,
+                    )
+                }
+            }
+        };
+        let mut rows: Vec<RowRef> = all_rows
+            .iter()
+            .copied()
+            .filter(|i| !grouped.contains(i))
+            .map(RowRef::Single)
+            .chain((0..version_groups.len()).map(RowRef::Group))
+            .collect();
+        rows.sort_by(|a, b| {
+            let (ka, kb) = (key_of(a), key_of(b));
             let ord = match col {
-                SortCol::Path => x.path.cmp(&y.path),
-                SortCol::Size => x.size_bytes.cmp(&y.size_bytes),
-                SortCol::Severity => severity_rank(x.severity).cmp(&severity_rank(y.severity)),
-                SortCol::Age => x.last_used.cmp(&y.last_used),
+                SortCol::Path => ka.0.cmp(kb.0),
+                SortCol::Size => ka.1.cmp(&kb.1),
+                SortCol::Severity => ka.2.cmp(&kb.2),
+                SortCol::Age => ka.3.cmp(&kb.3),
             };
             if asc {
                 ord
@@ -344,6 +433,8 @@ impl ChystikApp {
         });
         self.view = ViewCache {
             rows,
+            all_rows,
+            version_groups,
             cleanup_totals,
             cat_stats,
             all_bytes,
@@ -472,10 +563,15 @@ impl ChystikApp {
 impl eframe::App for ChystikApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_scanner(ctx);
+        self.poll_cleaner(ctx);
         self.ensure_view();
 
         // Section shortcuts, ignored while a dialog owns the keyboard.
-        if !self.consent_pending && !self.confirm_delete_open && !self.settings_open {
+        if !self.consent_pending
+            && !self.confirm_delete_open
+            && !self.settings_open
+            && !self.cleaning()
+        {
             let jump = ctx.input(|i| {
                 if i.modifiers.ctrl && i.key_pressed(egui::Key::K) {
                     return Some(None);
@@ -506,6 +602,10 @@ impl eframe::App for ChystikApp {
             // Deliberately first and exclusive: no scan, no selection and no
             // deletion is reachable until this is answered.
             self.show_consent_modal(ctx);
+        } else if self.cleaning() {
+            // Files are moving right now; nothing else may be opened over
+            // that, and the window keeps painting while it happens.
+            self.show_clean_progress(ctx);
         } else if self.privacy_confirm_open {
             self.show_privacy_confirm(ctx);
         } else if self.palette_open {
@@ -515,7 +615,10 @@ impl eframe::App for ChystikApp {
         } else if self.confirm_delete_open {
             self.show_confirm_modal(ctx);
         } else if let Some(notice) = self.notice.take() {
-            self.show_notice_modal(ctx, &notice);
+            // By value, and the modal puts it back unless it was dismissed:
+            // taking it here and dropping it showed the result for exactly
+            // one frame, which read as the dialog closing on its own.
+            self.show_notice_modal(ctx, notice);
         }
 
         egui::TopBottomPanel::top("command_bar")
@@ -674,8 +777,9 @@ impl ChystikApp {
 
     pub(crate) fn start_scan(&mut self) {
         // Belt and braces: the dialog already blocks the button, but the
-        // headless smoke hook calls this directly.
-        if self.consent_pending {
+        // headless smoke hook calls this directly. A scan during a cleanup
+        // would clear the findings the worker still holds indices into.
+        if self.consent_pending || self.cleaning() {
             return;
         }
         let roots = self.effective_roots();
@@ -720,10 +824,10 @@ impl ChystikApp {
         let handle = match spawned {
             Ok(h) => h,
             Err(e) => {
-                self.notice = Some(Notice {
-                    title: self.s().scan_failed.to_string(),
-                    lines: vec![e.to_string()],
-                });
+                self.notice = Some(Notice::info(
+                    self.s().scan_failed.to_string(),
+                    vec![e.to_string()],
+                ));
                 return;
             }
         };
@@ -828,16 +932,16 @@ impl ChystikApp {
         };
         match chystik_core::report::export_json(&self.findings, &path) {
             Ok(()) => {
-                self.notice = Some(Notice {
-                    title: self.s().export_done.to_string(),
-                    lines: vec![format!("Report written to {}", path.display())],
-                });
+                self.notice = Some(Notice::success(
+                    self.s().export_done.to_string(),
+                    vec![format!("Report written to {}", path.display())],
+                ));
             }
             Err(e) => {
-                self.notice = Some(Notice {
-                    title: self.s().export_failed.to_string(),
-                    lines: vec![e.to_string()],
-                });
+                self.notice = Some(Notice::info(
+                    self.s().export_failed.to_string(),
+                    vec![e.to_string()],
+                ));
             }
         }
     }
@@ -874,12 +978,15 @@ impl ChystikApp {
     }
 
     pub(crate) fn execute_trash(&mut self, indices: Vec<usize>) {
-        use chystik_core::cleaner::{self, CleanupItem, SkipReason};
+        use chystik_core::cleaner::CleanupItem;
+
+        if self.cleaning() {
+            return;
+        }
 
         // Excluded and advisory rows are unselectable in the UI; filtering
         // here as well means an exclusion added after the scan still holds.
         let mut planned: Vec<(usize, CleanupItem)> = Vec::new();
-        let mut errors: Vec<String> = Vec::new();
         let mut skipped = 0usize;
         for idx in indices {
             let Some(finding) = self.findings.get(idx) else {
@@ -904,16 +1011,166 @@ impl ChystikApp {
         // The guard checks, the identity re-check and the tallying all live
         // in core, where CI exercises them against a fake remover.
         let items: Vec<CleanupItem> = planned.iter().map(|(_, item)| item.clone()).collect();
-        let outcome = cleaner::clean(&items, &cleaner::SystemTrash);
+        let scope = CleanScope::Findings(
+            planned
+                .into_iter()
+                .map(|(idx, item)| (idx, item.path))
+                .collect(),
+        );
+        self.start_clean(scope, items, skipped);
+    }
 
-        let removed: std::collections::HashSet<&Path> =
-            outcome.removed.iter().map(PathBuf::as_path).collect();
-        for (idx, item) in &planned {
-            if removed.contains(item.path.as_path()) {
-                self.deleted.insert(*idx);
+    /// Hand `items` to a cleaner thread and switch the window into its
+    /// progress state.
+    ///
+    /// Nothing about the deletion itself changes here: the same flow runs,
+    /// item for item, with the same guard and identity checks. It simply
+    /// runs somewhere the UI thread can keep painting past it.
+    fn start_clean(
+        &mut self,
+        scope: CleanScope,
+        items: Vec<chystik_core::cleaner::CleanupItem>,
+        pre_skipped: usize,
+    ) {
+        use chystik_core::cleaner::{CleanupOutcome, SystemTrash};
+
+        if self.cleaning() {
+            return;
+        }
+        if items.is_empty() {
+            // Everything was refused before the worker: still report it,
+            // rather than swallowing the click.
+            self.finish_clean(scope, CleanupOutcome::default(), pre_skipped);
+            return;
+        }
+        let progress = CleanProgress {
+            total: items.len(),
+            total_bytes: items.iter().map(|item| item.size_bytes).sum(),
+            done: 0,
+            freed_bytes: 0,
+            current: None,
+        };
+        let (tx, rx) = channel::<CleanMsg>();
+        let spawned = std::thread::Builder::new()
+            .name("chystik-cleaner".to_string())
+            .spawn(move || {
+                let event_tx = tx.clone();
+                let outcome = cleaner::clean_streaming(&items, &SystemTrash, move |event| {
+                    let _ = event_tx.send(CleanMsg::Event(event));
+                });
+                let _ = tx.send(CleanMsg::Done(Box::new(outcome)));
+            });
+        match spawned {
+            Ok(handle) => {
+                self.notice = None;
+                self.clean = CleanState::Running {
+                    rx,
+                    handle,
+                    scope,
+                    progress,
+                    pre_skipped,
+                };
+            }
+            Err(e) => {
+                self.notice = Some(Notice::info(
+                    self.s().trash_failed_title.clone(),
+                    vec![e.to_string()],
+                ));
             }
         }
-        skipped += outcome.skipped_count();
+    }
+
+    /// Drain the cleaner channel and advance the progress counters. Keeps
+    /// the window repainting for as long as the worker lives.
+    pub(crate) fn poll_cleaner(&mut self, ctx: &egui::Context) {
+        let CleanState::Running { rx, progress, .. } = &mut self.clean else {
+            return;
+        };
+        let mut outcome: Option<Box<cleaner::CleanupOutcome>> = None;
+        let mut died = false;
+        loop {
+            match rx.try_recv() {
+                Ok(CleanMsg::Event(event)) => match event {
+                    cleaner::CleanEvent::Started { path, .. } => progress.current = Some(path),
+                    cleaner::CleanEvent::Removed { size_bytes, .. } => {
+                        progress.done += 1;
+                        progress.freed_bytes += size_bytes;
+                    }
+                    cleaner::CleanEvent::Skipped { .. } => progress.done += 1,
+                },
+                Ok(CleanMsg::Done(done)) => {
+                    outcome = Some(done);
+                    break;
+                }
+                Err(TryRecvError::Empty) => break,
+                // The worker sends `Done` before it drops the sender, so a
+                // disconnect without one means it died mid-batch.
+                Err(TryRecvError::Disconnected) => {
+                    died = true;
+                    break;
+                }
+            }
+        }
+
+        if outcome.is_none() && !died {
+            ctx.request_repaint_after(Duration::from_millis(33));
+            return;
+        }
+
+        let CleanState::Running {
+            handle,
+            scope,
+            pre_skipped,
+            ..
+        } = std::mem::replace(&mut self.clean, CleanState::Idle)
+        else {
+            return;
+        };
+        let _ = handle.join();
+        match outcome {
+            Some(outcome) => self.finish_clean(scope, *outcome, pre_skipped),
+            None => {
+                // Say the batch is in an unknown state rather than
+                // pretending a partial run was a clean result.
+                if matches!(scope, CleanScope::Traces) {
+                    self.traces = chystik_core::privacy::probe();
+                    self.traces_selected.clear();
+                }
+                self.refresh_disks();
+                self.notice = Some(Notice::info(
+                    self.s().trash_failed_title.clone(),
+                    vec![
+                        "the cleanup worker stopped before reporting; rescan to see what is left"
+                            .to_owned(),
+                    ],
+                ));
+            }
+        }
+    }
+
+    /// Apply a finished cleanup to the model and describe it to the user.
+    fn finish_clean(
+        &mut self,
+        scope: CleanScope,
+        outcome: cleaner::CleanupOutcome,
+        pre_skipped: usize,
+    ) {
+        use chystik_core::cleaner::SkipReason;
+
+        if let CleanScope::Findings(planned) = &scope {
+            let removed: std::collections::HashSet<&Path> =
+                outcome.removed.iter().map(PathBuf::as_path).collect();
+            for (idx, path) in planned {
+                if removed.contains(path.as_path()) {
+                    self.deleted.insert(*idx);
+                }
+            }
+            // Drop stale selections after deletion; the table refreshes
+            // automatically because deleted entries leave the cached view.
+            self.selected.retain(|i| !self.deleted.contains(i));
+        }
+
+        let mut errors: Vec<String> = Vec::new();
         for skip in &outcome.skipped {
             let path = truncate_middle(&display_path(&skip.path), 48);
             let detail = match &skip.reason {
@@ -928,10 +1185,12 @@ impl ChystikApp {
             errors.push(format!("{path}: {detail}"));
         }
         let (moved, freed) = (outcome.removed_count(), outcome.freed_bytes);
+        let skipped = pre_skipped + outcome.skipped_count();
 
-        // Drop stale selections after deletion; the table refreshes
-        // automatically because deleted entries leave the cached view.
-        self.selected.retain(|i| !self.deleted.contains(i));
+        if matches!(scope, CleanScope::Traces) {
+            self.traces = chystik_core::privacy::probe();
+            self.traces_selected.clear();
+        }
         // Free-space numbers changed — re-stat mounts for the header chips.
         self.refresh_disks();
 
@@ -952,9 +1211,12 @@ impl ChystikApp {
             ));
         }
         info.extend(errors);
-        self.notice = Some(Notice {
-            title: loc.trash_done_title.to_string(),
-            lines: info,
+        // The check-mark is a claim about what happened, so it is earned by
+        // something actually reaching the trash.
+        self.notice = Some(if moved > 0 {
+            Notice::success(loc.trash_done_title.to_string(), info)
+        } else {
+            Notice::info(loc.trash_done_title.to_string(), info)
         });
     }
 }
@@ -983,6 +1245,7 @@ mod tests {
             note: "test".into(),
             advice: None,
             provenance: None,
+            version_group: None,
         }
     }
 
@@ -1089,13 +1352,126 @@ mod tests {
         assert_eq!(app.view.all_bytes, 99, "the view kept the old contents");
     }
 
+    /// Two-plus findings sharing a `version_group` collapse into one row,
+    /// while every member stays reachable through `all_rows` for bulk
+    /// selection.
+    #[test]
+    fn superseded_versions_collapse_into_one_group_row() {
+        use chrono::{TimeZone, Utc};
+
+        let dir = PathBuf::from("/home/me/.local/share/claude/versions");
+        let mut older = finding("/home/me/.local/share/claude/versions/2.1.216", 100);
+        older.category = Category::AiAgents;
+        older.severity = Severity::Moderate;
+        older.note = "superseded Claude Code build — the current one is kept".into();
+        older.version_group = Some(dir.clone());
+        older.last_used = Some(Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap());
+
+        let mut newer = finding("/home/me/.local/share/claude/versions/2.1.217", 50);
+        newer.category = Category::AiAgents;
+        newer.severity = Severity::Moderate;
+        newer.note = older.note.clone();
+        newer.version_group = Some(dir.clone());
+        newer.last_used = Some(Utc.with_ymd_and_hms(2026, 2, 1, 0, 0, 0).unwrap());
+
+        let mut app = app_with(vec![older, newer, finding("/unrelated", 10)]);
+        app.ensure_view();
+
+        assert_eq!(app.view.version_groups.len(), 1, "the pair must collapse");
+        let group = &app.view.version_groups[0];
+        assert_eq!(group.app_name, "Claude Code");
+        assert_eq!(group.total_bytes, 150);
+        assert_eq!(group.members, vec![1, 0], "newest member listed first");
+
+        let group_rows = app
+            .view
+            .rows
+            .iter()
+            .filter(|r| matches!(r, RowRef::Group(_)))
+            .count();
+        assert_eq!(group_rows, 1, "exactly one collapsed row, not two singles");
+        assert_eq!(
+            app.view.rows.len(),
+            2,
+            "the group row plus the unrelated finding"
+        );
+        assert_eq!(
+            app.view.all_rows.len(),
+            3,
+            "bulk selection must still reach every member"
+        );
+    }
+
+    /// The Age column sorts a group row by its oldest member — the same
+    /// value that column actually displays for that row (see
+    /// `version_group_tooltip`/the Age cell in `panels::table_ui`). A stale
+    /// sort key of `None` would silently disagree with what is on screen.
+    #[test]
+    fn version_group_sorts_by_its_oldest_members_age() {
+        use chrono::{TimeZone, Utc};
+
+        let dir = PathBuf::from("/home/me/.local/share/claude/versions");
+        let mut oldest = finding("/home/me/.local/share/claude/versions/2.1.216", 100);
+        oldest.version_group = Some(dir.clone());
+        oldest.last_used = Some(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap());
+
+        let mut newest_superseded = finding("/home/me/.local/share/claude/versions/2.1.217", 50);
+        newest_superseded.version_group = Some(dir);
+        newest_superseded.last_used = Some(Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap());
+
+        // Between the two members in age: the group's key must place it on
+        // the OLDEST side, not vanish to whichever end `None` sorts to.
+        let mut between = finding("/between", 10);
+        between.last_used = Some(Utc.with_ymd_and_hms(2023, 1, 1, 0, 0, 0).unwrap());
+
+        let mut app = app_with(vec![oldest, newest_superseded, between]);
+        app.sort_col = SortCol::Age;
+        app.sort_asc = true; // oldest first
+        app.ensure_view();
+
+        assert_eq!(app.view.version_groups.len(), 1);
+        assert_eq!(
+            app.view.rows,
+            vec![RowRef::Group(0), RowRef::Single(2)],
+            "the group (2020) must sort before the standalone 2023 finding"
+        );
+    }
+
+    /// A single superseded build is not worth collapsing — nothing to
+    /// summarize away — so it renders as an ordinary row.
+    #[test]
+    fn a_lone_superseded_version_stays_a_normal_row() {
+        let mut only = finding("/home/me/.codex/packages/standalone/releases/1.0.0", 10);
+        only.version_group = Some(PathBuf::from(
+            "/home/me/.codex/packages/standalone/releases",
+        ));
+
+        let mut app = app_with(vec![only]);
+        app.ensure_view();
+
+        assert!(app.view.version_groups.is_empty());
+        assert_eq!(app.view.rows.len(), 1);
+        assert!(matches!(app.view.rows[0], RowRef::Single(0)));
+    }
+
     /// Every cached index must be addressable, whatever the app has done.
     #[test]
     fn cached_rows_never_outlive_their_findings() {
         let mut app = app_with(vec![finding("/a", 10)]);
         app.ensure_view();
         app.reset_results();
-        for &i in &app.view.rows {
+        for i in &app.view.all_rows {
+            assert!(
+                app.findings.get(*i).is_some(),
+                "row {i} points past the end of findings"
+            );
+        }
+        // None of the fixtures here set `version_group`, so every row must
+        // still be a single — this also exercises `RowRef` matching.
+        for row in &app.view.rows {
+            let RowRef::Single(i) = *row else {
+                panic!("unexpected version group with no grouped findings");
+            };
             assert!(
                 app.findings.get(i).is_some(),
                 "row {i} points past the end of findings"

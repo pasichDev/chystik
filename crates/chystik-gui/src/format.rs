@@ -66,7 +66,6 @@ pub(crate) fn capacity_summary(disks: &[StorageVolume]) -> String {
     )
 }
 
-
 /// Middle-truncate a string with an ellipsis, keeping head and tail visible.
 pub(crate) fn truncate_middle(s: &str, max_chars: usize) -> String {
     let chars: Vec<char> = s.chars().collect();
@@ -211,7 +210,10 @@ mod tests {
             r"\\server\share\cache"
         );
         // Anything without the prefix is returned unchanged, on any platform.
-        assert_eq!(display_path(Path::new("/home/me/.cache")), "/home/me/.cache");
+        assert_eq!(
+            display_path(Path::new("/home/me/.cache")),
+            "/home/me/.cache"
+        );
     }
 
     #[test]

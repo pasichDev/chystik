@@ -40,6 +40,7 @@ fn finding(path: impl AsRef<Path>, severity: Severity, size_bytes: u64) -> Findi
         note: "fixture".into(),
         advice: None,
         provenance: None,
+        version_group: None,
     }
 }
 

@@ -151,83 +151,137 @@ impl CleanupOutcome {
     }
 }
 
+/// Progress from a cleanup run: one `Started` per item, then exactly one
+/// terminal event for it, emitted in the order the items were given.
+///
+/// A batch can be gigabytes and a single trash move can take seconds, so a
+/// caller with a window to keep alive runs [`clean_streaming`] on a worker
+/// thread and paints from these instead of freezing until the whole batch
+/// is done.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CleanEvent {
+    /// About to validate and move `path`; `index` is its 0-based position
+    /// in the batch.
+    Started { index: usize, path: PathBuf },
+    /// It reached the trash, freeing `size_bytes`.
+    Removed {
+        index: usize,
+        path: PathBuf,
+        size_bytes: u64,
+    },
+    /// It was left where it is, for `reason`.
+    Skipped {
+        index: usize,
+        path: PathBuf,
+        reason: SkipReason,
+    },
+}
+
 /// Run the flow over `items`. Never panics and never stops early: one bad
 /// item must not prevent the rest from being cleaned.
 pub fn clean(items: &[CleanupItem], remover: &dyn Remover) -> CleanupOutcome {
-    clean_with_support(items, remover, platform::current().cleanup_support())
+    clean_streaming(items, remover, |_| {})
+}
+
+/// [`clean`], reporting each item as it is reached. The outcome is
+/// identical; `on_event` runs on the calling thread between items, so it
+/// must not block — sending down a channel is the intended use.
+pub fn clean_streaming(
+    items: &[CleanupItem],
+    remover: &dyn Remover,
+    mut on_event: impl FnMut(CleanEvent),
+) -> CleanupOutcome {
+    clean_with_support(
+        items,
+        remover,
+        platform::current().cleanup_support(),
+        &mut on_event,
+    )
 }
 
 fn clean_with_support(
     items: &[CleanupItem],
     remover: &dyn Remover,
     support: CleanupSupport,
+    on_event: &mut dyn FnMut(CleanEvent),
 ) -> CleanupOutcome {
     let mut outcome = CleanupOutcome::default();
     if let CleanupSupport::ScanOnly { reason } = support {
-        outcome.skipped.extend(items.iter().map(|item| Skipped {
-            path: item.path.clone(),
-            reason: SkipReason::CleanupUnavailable(reason),
-        }));
+        for (index, item) in items.iter().enumerate() {
+            let reason = SkipReason::CleanupUnavailable(reason);
+            on_event(CleanEvent::Skipped {
+                index,
+                path: item.path.clone(),
+                reason: reason.clone(),
+            });
+            outcome.skipped.push(Skipped {
+                path: item.path.clone(),
+                reason,
+            });
+        }
         return outcome;
     }
-    for item in items {
-        let path = item.path.clone();
-
-        let Some(root) = item.scan_root.as_deref() else {
-            outcome.skipped.push(Skipped {
-                path,
-                reason: SkipReason::OutsideEveryTarget,
-            });
-            continue;
-        };
-        if guard::check(&path, root).is_err() {
-            outcome.skipped.push(Skipped {
-                path,
-                reason: SkipReason::Refused,
-            });
-            continue;
-        }
-        // Captured after validation and checked again below, so a swap in
-        // between is caught rather than acted on.
-        let Some(identity) = FileIdentity::of(&path) else {
-            outcome.skipped.push(Skipped {
-                path,
-                reason: SkipReason::ChangedUnderUs,
-            });
-            continue;
-        };
-        if !identity.still_matches(&path) {
-            outcome.skipped.push(Skipped {
-                path,
-                reason: SkipReason::ChangedUnderUs,
-            });
-            continue;
-        }
-        // Re-run the full guard at the last instant before the destructive
-        // call. If the path turned into a reparse point, a protected location
-        // or something outside the scan root after the first check, it is
-        // refused rather than acted on. This narrows the check-to-act window
-        // as far as a name-based trash API allows; only openat/O_NOFOLLOW plus
-        // removal through a directory descriptor would close it entirely.
-        if guard::check(&path, root).is_err() {
-            outcome.skipped.push(Skipped {
-                path,
-                reason: SkipReason::Refused,
-            });
-            continue;
-        }
-        match remover.remove(&path) {
+    for (index, item) in items.iter().enumerate() {
+        on_event(CleanEvent::Started {
+            index,
+            path: item.path.clone(),
+        });
+        match remove_one(item, remover) {
             Ok(()) => {
                 outcome.freed_bytes += item.size_bytes;
-                outcome.removed.push(path);
+                outcome.removed.push(item.path.clone());
+                on_event(CleanEvent::Removed {
+                    index,
+                    path: item.path.clone(),
+                    size_bytes: item.size_bytes,
+                });
             }
-            Err(e) => outcome.skipped.push(Skipped {
-                path,
-                reason: SkipReason::RemoverFailed(e.to_string()),
-            }),
+            Err(reason) => {
+                on_event(CleanEvent::Skipped {
+                    index,
+                    path: item.path.clone(),
+                    reason: reason.clone(),
+                });
+                outcome.skipped.push(Skipped {
+                    path: item.path.clone(),
+                    reason,
+                });
+            }
         }
     }
     outcome
+}
+
+/// The per-item flow, written once: validate, prove identity, validate
+/// again, remove. `Err` names exactly why the path was left alone.
+fn remove_one(item: &CleanupItem, remover: &dyn Remover) -> Result<(), SkipReason> {
+    let path = item.path.as_path();
+    // An item with no owning target is refused rather than guessed at.
+    let root = item
+        .scan_root
+        .as_deref()
+        .ok_or(SkipReason::OutsideEveryTarget)?;
+    if guard::check(path, root).is_err() {
+        return Err(SkipReason::Refused);
+    }
+    // Captured after validation and checked again below, so a swap in
+    // between is caught rather than acted on.
+    let identity = FileIdentity::of(path).ok_or(SkipReason::ChangedUnderUs)?;
+    if !identity.still_matches(path) {
+        return Err(SkipReason::ChangedUnderUs);
+    }
+    // Re-run the full guard at the last instant before the destructive
+    // call. If the path turned into a reparse point, a protected location
+    // or something outside the scan root after the first check, it is
+    // refused rather than acted on. This narrows the check-to-act window
+    // as far as a name-based trash API allows; only openat/O_NOFOLLOW plus
+    // removal through a directory descriptor would close it entirely.
+    if guard::check(path, root).is_err() {
+        return Err(SkipReason::Refused);
+    }
+    remover
+        .remove(path)
+        .map_err(|e| SkipReason::RemoverFailed(e.to_string()))
 }
 
 #[cfg(test)]
@@ -247,7 +301,7 @@ mod tests {
     /// Exercise the portable validate/identity/remover flow without claiming
     /// that the current host has a native recovery mechanism.
     fn clean_with_native_trash(items: &[CleanupItem], remover: &dyn Remover) -> CleanupOutcome {
-        clean_with_support(items, remover, CleanupSupport::NativeTrash)
+        clean_with_support(items, remover, CleanupSupport::NativeTrash, &mut |_| {})
     }
 
     /// Records what it was asked to remove and leaves the disk alone.
@@ -302,6 +356,88 @@ mod tests {
         assert_eq!(remover.seen().len(), 2);
     }
 
+    /// Progress must arrive item by item, not in one lump at the end —
+    /// that is the whole point of the streaming entry point, and a UI
+    /// painting from it would otherwise still look frozen.
+    #[test]
+    fn streaming_reports_every_item_as_it_is_reached() {
+        let root = tempdir().unwrap();
+        let good = root.path().join("good");
+        std::fs::create_dir_all(&good).unwrap();
+        let orphan = root.path().join("orphan");
+        std::fs::create_dir_all(&orphan).unwrap();
+
+        let remover = FakeRemover::default();
+        let mut events = Vec::new();
+        let outcome = clean_with_support(
+            &[
+                item(&good, root.path(), 100),
+                CleanupItem {
+                    path: orphan.clone(),
+                    size_bytes: 40,
+                    scan_root: None,
+                },
+            ],
+            &remover,
+            CleanupSupport::NativeTrash,
+            &mut |event| events.push(event),
+        );
+
+        assert_eq!(
+            events,
+            vec![
+                CleanEvent::Started {
+                    index: 0,
+                    path: good.clone()
+                },
+                CleanEvent::Removed {
+                    index: 0,
+                    path: good.clone(),
+                    size_bytes: 100
+                },
+                CleanEvent::Started {
+                    index: 1,
+                    path: orphan.clone()
+                },
+                CleanEvent::Skipped {
+                    index: 1,
+                    path: orphan,
+                    reason: SkipReason::OutsideEveryTarget
+                },
+            ]
+        );
+        // The streamed events and the returned tally never disagree.
+        assert_eq!(outcome.removed, vec![good]);
+        assert_eq!(outcome.freed_bytes, 100);
+        assert_eq!(outcome.skipped_count(), 1);
+    }
+
+    /// `clean` is `clean_streaming` with the events dropped; it must not
+    /// have drifted into a second copy of the flow.
+    #[test]
+    fn streaming_and_silent_entry_points_agree() {
+        let root = tempdir().unwrap();
+        let target = root.path().join("cache");
+        std::fs::create_dir_all(&target).unwrap();
+
+        let remover = FakeRemover::default();
+        let mut count = 0usize;
+        let streamed = clean_with_support(
+            &[item(&target, root.path(), 7)],
+            &remover,
+            CleanupSupport::NativeTrash,
+            &mut |_| count += 1,
+        );
+        // The fake actually unlinks, so the second run needs its own copy
+        // of the fixture rather than the one just consumed.
+        std::fs::create_dir_all(&target).unwrap();
+        let silent = clean_with_native_trash(&[item(&target, root.path(), 7)], &remover);
+
+        assert_eq!(count, 2); // Started + one terminal event
+        assert_eq!(streamed.removed, silent.removed);
+        assert_eq!(streamed.freed_bytes, silent.freed_bytes);
+    }
+
     #[test]
     fn scan_only_platform_never_hands_a_path_to_the_remover() {
         let root = tempdir().unwrap();
@@ -315,6 +451,7 @@ mod tests {
             CleanupSupport::ScanOnly {
                 reason: "native trash has not been verified",
             },
+            &mut |_| {},
         );
 
         assert!(remover.seen().is_empty());

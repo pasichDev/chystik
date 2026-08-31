@@ -470,10 +470,13 @@ impl ChystikApp {
             }
         };
 
-        // Rows the bulk action may legitimately touch: never Risky.
+        // Rows the bulk action may legitimately touch: never Risky. Uses
+        // `all_rows`, not the collapsed `rows`, so a version group's
+        // members stay reachable by this bulk action even though they no
+        // longer have a row of their own.
         let selectable: Vec<usize> = self
             .view
-            .rows
+            .all_rows
             .iter()
             .copied()
             .filter(|i| is_bulk_safe_finding(&self.findings[*i]))
@@ -564,6 +567,7 @@ impl ChystikApp {
     pub(crate) fn table_ui(&mut self, ui: &mut egui::Ui) {
         let (lang, s) = (self.lang, self.s());
         let rows = &self.view.rows;
+        let version_groups = &self.view.version_groups;
         let scanning = self.scanning();
         let findings = &self.findings;
         let selected = &self.selected;
@@ -716,15 +720,84 @@ impl ChystikApp {
                         // The per-row `TableBody::row` API renders EVERY row
                         // and froze the window at ~6 fps on a large scan.
                         body.rows(ROW_H, rows.len(), |mut row| {
-                            let idx = rows[row.index()];
-                            let finding = &findings[idx];
-                            let risky = finding.severity == Severity::Risky;
-                            let mut checked = selected.contains(&idx);
+                            // Both a plain finding and a collapsed version
+                            // group render through the same fields below —
+                            // extracted once here so the drawing code stays
+                            // written once instead of twice.
+                            let (
+                                path_for_menu,
+                                head,
+                                tail,
+                                tooltip,
+                                advice,
+                                note,
+                                size_bytes,
+                                severity,
+                                last_used,
+                                actionable,
+                                members,
+                            ) = match rows[row.index()] {
+                                RowRef::Single(idx) => {
+                                    let finding = &findings[idx];
+                                    let full = display_path(&finding.path);
+                                    // Dim the directory prefix so the eye
+                                    // lands on the last component, which is
+                                    // what identifies the item.
+                                    let (head, tail) = split_path_tail(&full);
+                                    (
+                                        finding.path.clone(),
+                                        head,
+                                        tail,
+                                        finding_tooltip(lang, finding),
+                                        finding.advice.as_deref(),
+                                        finding.note.as_str(),
+                                        finding.size_bytes,
+                                        finding.severity,
+                                        finding.last_used,
+                                        finding.is_actionable(),
+                                        vec![idx],
+                                    )
+                                }
+                                RowRef::Group(gi) => {
+                                    let group = &version_groups[gi];
+                                    let (head, _) = split_path_tail(&display_path(&group.dir));
+                                    let tail = i18n::fill(
+                                        s.version_group_row.as_str(),
+                                        &[
+                                            ("app", group.app_name.as_str()),
+                                            ("n", &group.count().to_string()),
+                                            ("size", &format_size(group.total_bytes)),
+                                        ],
+                                    );
+                                    // Oldest member: the one that has sat
+                                    // untouched the longest, which is what
+                                    // the Age column means for a single row.
+                                    let oldest = *group
+                                        .members
+                                        .last()
+                                        .expect("a version group always has at least two members");
+                                    (
+                                        group.dir.clone(),
+                                        head,
+                                        tail,
+                                        version_group_tooltip(s, group, findings),
+                                        None,
+                                        group.note.as_str(),
+                                        group.total_bytes,
+                                        group.severity,
+                                        findings[oldest].last_used,
+                                        group.members.iter().all(|&i| findings[i].is_actionable()),
+                                        group.members.clone(),
+                                    )
+                                }
+                            };
+                            let risky = severity == Severity::Risky;
+                            let mut checked = members.iter().all(|i| selected.contains(i));
 
                             row.col(|ui| {
-                                if !finding.is_actionable() {
+                                if !actionable {
                                     paint_info_mark(ui, 13.0, COL_ACCENT)
-                                        .on_hover_text(finding_tooltip(lang, finding));
+                                        .on_hover_text(tooltip.as_str());
                                 } else if risky {
                                     // Never bulk-selectable: say why instead
                                     // of showing a dead checkbox.
@@ -737,16 +810,13 @@ impl ChystikApp {
                                     ui.allocate_response(egui::Vec2::ZERO, egui::Sense::hover())
                                         .on_hover_text(s.risky_locked_hint.as_str());
                                 } else if ui.checkbox(&mut checked, "").changed() {
-                                    row_toggles.push((idx, checked));
+                                    for &m in &members {
+                                        row_toggles.push((m, checked));
+                                    }
                                 }
                             });
 
                             row.col(|ui| {
-                                let full = display_path(&finding.path);
-                                // Dim the directory prefix so the eye lands
-                                // on the last component, which is what
-                                // identifies the item.
-                                let (head, tail) = split_path_tail(&full);
                                 ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
                                 let row_response = ui.vertical(|ui| {
                                     ui.add_space(space(1.0));
@@ -774,12 +844,16 @@ impl ChystikApp {
                                     // the path title only. Advisory commands
                                     // own their copy tooltip, and two nested
                                     // tooltips otherwise fight every frame.
-                                    .on_hover_text(finding_tooltip(lang, finding));
+                                    //
+                                    // Last use of `tooltip` in this row, so
+                                    // it moves here instead of cloning.
+                                    .on_hover_text(tooltip);
                                     ui.add_space(1.0);
-                                    match finding.advice.as_deref() {
+                                    match advice {
                                         // For advisory rows the command IS
                                         // the useful line; the note is in
-                                        // the tooltip.
+                                        // the tooltip. Never set for a
+                                        // version group.
                                         Some(command) => {
                                             // Clicking copies it: the row is
                                             // useless unless the command can
@@ -793,7 +867,7 @@ impl ChystikApp {
                                             );
                                             let copy_hint = if advice_copy_feedback_is_active(
                                                 copied_advice,
-                                                idx,
+                                                members[0],
                                                 now,
                                             ) {
                                                 s.advice_copied.as_str()
@@ -808,24 +882,20 @@ impl ChystikApp {
                                                 ui.output_mut(|o| {
                                                     o.copied_text = command.to_owned()
                                                 });
-                                                copied_advice_request = Some(idx);
+                                                copied_advice_request = Some(members[0]);
                                             }
                                         }
                                         None => {
                                             ui.add(
-                                                egui::Label::new(txt(
-                                                    &finding.note,
-                                                    "micro",
-                                                    COL_TEXT3,
-                                                ))
-                                                .truncate(),
+                                                egui::Label::new(txt(note, "micro", COL_TEXT3))
+                                                    .truncate(),
                                             );
                                         }
                                     }
                                 });
                                 row_response.response.context_menu(|ui| {
                                     if ui.button(s.exclusions_add.as_str()).clicked() {
-                                        exclude_request = Some(finding.path.clone());
+                                        exclude_request = Some(path_for_menu.clone());
                                         ui.close_menu();
                                     }
                                 });
@@ -835,11 +905,7 @@ impl ChystikApp {
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
-                                        ui.label(txt(
-                                            format_size(finding.size_bytes),
-                                            "mono_lg",
-                                            COL_TEXT,
-                                        ));
+                                        ui.label(txt(format_size(size_bytes), "mono_lg", COL_TEXT));
                                     },
                                 );
                             });
@@ -847,24 +913,19 @@ impl ChystikApp {
                             row.col(|ui| {
                                 ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
                                     ui.add_space((ROW_H - RECOVERY_DOT_SIZE) / 2.0);
-                                    recovery_dot(ui, finding.severity, lang);
+                                    recovery_dot(ui, severity, lang);
                                 });
                             });
 
                             row.col(|ui| {
-                                let stale = finding
-                                    .last_used
-                                    .is_some_and(|t| (age_now - t).num_days() >= 180);
+                                let stale =
+                                    last_used.is_some_and(|t| (age_now - t).num_days() >= 180);
                                 let color = if stale {
                                     severity_color(Severity::Moderate)
                                 } else {
                                     COL_TEXT3
                                 };
-                                ui.label(txt(
-                                    age_label(finding.last_used, age_now, s),
-                                    "caption",
-                                    color,
-                                ));
+                                ui.label(txt(age_label(last_used, age_now, s), "caption", color));
                             });
                         });
                     });
@@ -899,15 +960,19 @@ impl ChystikApp {
         let selected = self.selected_visible_rows();
         let sel_count = selected.len();
         let sel_bytes: u64 = selected.iter().map(|(_, f)| f.size_bytes).sum();
-        let busy = self.scanning();
+        // A cleanup owns the findings just as a scan does: no re-select,
+        // no second submission while the worker is running.
+        let busy = self.busy();
         let totals = self.view.cleanup_totals;
 
         // Every selectable row in the current category view — what "Select all"
         // ticks. Advisory/manual rows are not actionable and stay out, and an
-        // excluded path is never offered.
+        // excluded path is never offered. `all_rows`, not `rows`: a version
+        // group's members must stay reachable even though they render as
+        // one collapsed row.
         let all_actionable: Vec<usize> = self
             .view
-            .rows
+            .all_rows
             .iter()
             .copied()
             .filter(|i| {
@@ -1343,7 +1408,7 @@ impl ChystikApp {
                     ui,
                     &label,
                     severity_color(Severity::Risky),
-                    count > 0 && !self.scanning() && self.cleanup_available(),
+                    count > 0 && !self.busy() && self.cleanup_available(),
                 )
                 .on_hover_text(if self.cleanup_available() {
                     s.move_to_trash_hint.as_str()
@@ -1416,6 +1481,32 @@ fn finding_tooltip(lang: i18n::Lang, finding: &chystik_core::model::Finding) -> 
     lines.join("\n\n")
 }
 
+/// Explain a collapsed version-group row: which app has a newer build
+/// installed, then every superseded build it is offering to remove.
+fn version_group_tooltip(
+    s: &i18n::Strings,
+    group: &crate::state::VersionGroup,
+    findings: &[chystik_core::model::Finding],
+) -> String {
+    let mut lines = vec![
+        i18n::fill(
+            s.version_group_tooltip_lead.as_str(),
+            &[("app", group.app_name.as_str())],
+        ),
+        group.note.clone(),
+    ];
+    for &i in &group.members {
+        let finding = &findings[i];
+        let label = finding
+            .path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| display_path(&finding.path));
+        lines.push(format!("• {label} — {}", format_size(finding.size_bytes)));
+    }
+    lines.join("\n")
+}
+
 /// Bulk selection is a stricter promise than a manual tick: only findings
 /// that have automatic recovery and the explicit `DirectSafe` policy may enter it.
 /// A `DirectReview` finding remains available as a deliberate per-row choice.
@@ -1476,6 +1567,7 @@ mod tests {
                 reviewed_at: "2026-08-26".into(),
                 preconditions: vec!["fixture precondition".into()],
             }),
+            version_group: None,
         }
     }
 
