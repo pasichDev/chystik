@@ -81,6 +81,10 @@ pub(crate) struct RuleRoots {
     pub home_dir: PathBuf,
     pub cache_dir: PathBuf,
     pub local_app_data_dir: Option<PathBuf>,
+    /// Windows roaming profile (`%APPDATA%`). Only Windows populates it; it is
+    /// where many Electron and vendor apps park regenerable caches that are
+    /// not under the local profile.
+    pub roaming_app_data_dir: Option<PathBuf>,
     pub library_caches_dir: Option<PathBuf>,
     pub developer_dir: Option<PathBuf>,
     pub volume_root: Option<PathBuf>,

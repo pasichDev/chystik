@@ -6,7 +6,7 @@ recovery_note = "the next C/C++ build recompiles cache misses"
 cleanup_policy = "auto-cleanable"
 note = "ccache compiler outputs — rebuilt while C/C++ projects compile"
 source_url = "https://ccache.dev/manual/latest.html"
-reviewed_at = "2026-08-26"
+reviewed_at = "2026-08-30"
 preconditions = [
   "the path is the exact documented cache root",
   "the path remains inside a Chystik-owned user root",
@@ -45,7 +45,7 @@ recovery_note = "the next compiler run repopulates local cache entries"
 cleanup_policy = "auto-cleanable"
 note = "sccache compiler outputs — rebuilt while projects compile"
 source_url = "https://android.googlesource.com/toolchain/sccache/+/HEAD/docs/Local.md"
-reviewed_at = "2026-08-26"
+reviewed_at = "2026-08-30"
 preconditions = [
   "the path is the exact documented cache root",
   "the path remains inside a Chystik-owned user root",
@@ -79,7 +79,7 @@ recovery_note = "the next vcpkg install rebuilds or downloads archives"
 cleanup_policy = "auto-cleanable"
 note = "vcpkg binary archives — rebuilt or downloaded by the next install"
 source_url = "https://learn.microsoft.com/en-us/vcpkg/users/binarycaching"
-reviewed_at = "2026-08-26"
+reviewed_at = "2026-08-30"
 preconditions = [
   "the path is the exact documented cache root",
   "the path remains inside a Chystik-owned user root",
@@ -113,7 +113,7 @@ recovery_note = "Conan downloads or rebuilds selected packages"
 cleanup_policy = "tool-managed"
 note = "Conan package storage — clean it through Conan so package references stay valid"
 source_url = "https://docs.conan.io/2/reference/commands/cache.html"
-reviewed_at = "2026-08-26"
+reviewed_at = "2026-08-30"
 preconditions = [
   "Chystik must not move this path to Trash",
   "use the owning operating-system or vendor command instead",

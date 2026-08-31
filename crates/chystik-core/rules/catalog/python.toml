@@ -6,7 +6,7 @@ recovery_note = "the next package install re-downloads cached artifacts"
 cleanup_policy = "auto-cleanable"
 note = "pip download and wheel cache — refetched by the next install"
 source_url = "https://pip.pypa.io/en/stable/topics/caching/"
-reviewed_at = "2026-08-26"
+reviewed_at = "2026-08-30"
 preconditions = [
   "the path is the exact documented cache root",
   "the path remains inside a Chystik-owned user root",

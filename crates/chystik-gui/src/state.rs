@@ -3,9 +3,11 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
+use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
+use chystik_core::cleaner::{CleanEvent, CleanupOutcome};
 use chystik_core::model::{Category, Finding, FindingPolicy, RecoveryClass, Severity};
 use chystik_core::platform::StorageVolume;
 
@@ -18,6 +20,65 @@ pub(crate) enum ScanState {
     Scanning {
         cancel_flag: Arc<AtomicBool>,
         handle: JoinHandle<()>,
+    },
+}
+
+/// What the cleaner thread sends back. The events are progress; the single
+/// `Done` carries the authoritative tally the notice is built from, so the
+/// UI never has to re-derive it from the events it happened to observe.
+pub(crate) enum CleanMsg {
+    Event(CleanEvent),
+    Done(Box<CleanupOutcome>),
+}
+
+/// Which model a running cleanup has to update when it lands.
+pub(crate) enum CleanScope {
+    /// Rows submitted from the findings table, paired with the index each
+    /// path came from so the removed ones can be struck off.
+    Findings(Vec<(usize, PathBuf)>),
+    /// The privacy view keeps no per-row bookkeeping; it re-probes instead.
+    Traces,
+}
+
+/// Live counters the progress modal paints. Advanced from `CleanMsg`s on
+/// the UI thread, never read across threads.
+pub(crate) struct CleanProgress {
+    pub(crate) total: usize,
+    pub(crate) total_bytes: u64,
+    /// Items that reached a terminal event, removed or skipped.
+    pub(crate) done: usize,
+    pub(crate) freed_bytes: u64,
+    /// The path currently being validated and moved.
+    pub(crate) current: Option<PathBuf>,
+}
+
+impl CleanProgress {
+    /// 0.0..=1.0 by item count. Byte-weighted progress would be a lie: the
+    /// scanner sizes a directory, it does not time the move.
+    pub(crate) fn fraction(&self) -> f32 {
+        if self.total == 0 {
+            return 1.0;
+        }
+        self.done as f32 / self.total as f32
+    }
+}
+
+/// Deletion lifecycle, mirroring `ScanState`.
+///
+/// Cleaning ran inline on the UI thread until it did not: moving a
+/// multi-gigabyte cache to the recycle bin froze the window for the whole
+/// batch, so the confirmation dialog looked hung and the result notice
+/// flashed past. The work belongs on a worker, reporting as it goes.
+pub(crate) enum CleanState {
+    Idle,
+    Running {
+        rx: Receiver<CleanMsg>,
+        handle: JoinHandle<()>,
+        scope: CleanScope,
+        progress: CleanProgress,
+        /// Rows the UI itself refused before the worker started (excluded
+        /// or advisory), folded into the final skipped count.
+        pre_skipped: usize,
     },
 }
 
@@ -106,12 +167,98 @@ pub(crate) struct ViewStamp {
     pub(crate) sort_asc: bool,
 }
 
+/// One table row: either a single finding, or several collapsed into one
+/// version group. `usize`/`Group` index into `findings`/`version_groups`
+/// respectively rather than borrowing, so `ViewCache` stays self-contained
+/// and `Copy`-cheap to sort.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RowRef {
+    Single(usize),
+    Group(usize),
+}
+
+/// Several historical builds of the same tool collapsed into one table row.
+///
+/// A versioned store (`~/.local/share/claude/versions` and similar — see
+/// `chystik_core::rules::GROUP_RULES`) keeps every build it ever fetched
+/// while only the newest runs. The scanner already reports each superseded
+/// build as its own finding; showing them as N look-alike rows that differ
+/// only by a version number in the path buried the actual message ("a
+/// newer build exists, these are safe to remove") in repetition. Grouping
+/// is purely a display concern — every member is still a real, independent
+/// `Finding`, selected and deleted exactly like any other.
+pub(crate) struct VersionGroup {
+    /// The shared parent directory — `Finding::version_group` — and where
+    /// the "exclude this" context action points.
+    pub(crate) dir: PathBuf,
+    /// Human name for the row's headline, e.g. "Claude Code".
+    pub(crate) app_name: String,
+    /// The rule's shared note, reused verbatim as the row's sub-line —
+    /// same convention as an ordinary finding row.
+    pub(crate) note: String,
+    /// Indices into `findings`, newest `last_used` first.
+    pub(crate) members: Vec<usize>,
+    pub(crate) total_bytes: u64,
+    /// Shared by every member — a `GroupRule` sets one severity for all
+    /// the builds it supersedes.
+    pub(crate) severity: Severity,
+}
+
+impl VersionGroup {
+    pub(crate) fn count(&self) -> usize {
+        self.members.len()
+    }
+}
+
+/// Best-effort human name for a versioned store, derived from its rule note
+/// first and its own directory name otherwise. Kept beside `GROUP_RULES`'
+/// notes in intent, not in code: a new group rule works today, just with a
+/// generic label, until its note text (or this table) is taught the name.
+pub(crate) fn friendly_app_name(note: &str, dir: &Path) -> String {
+    const KNOWN: &[(&str, &str)] = &[
+        ("Claude Code", "Claude Code"),
+        ("Codex CLI", "Codex CLI"),
+        ("Node.js", "Node.js"),
+        ("Toolbox", "JetBrains Toolbox"),
+    ];
+    for (needle, name) in KNOWN {
+        if note.contains(needle) {
+            return (*name).to_owned();
+        }
+    }
+    // Fall back to the store's own directory name, skipping a generic leaf
+    // that names the mechanism ("versions", "releases") rather than the
+    // application that owns it.
+    const GENERIC_LEAVES: &[&str] = &["versions", "releases", "apps", "toolchains", "packages"];
+    let mut components: Vec<&str> = dir
+        .components()
+        .filter_map(|c| c.as_os_str().to_str())
+        .collect();
+    while let Some(last) = components.last() {
+        if GENERIC_LEAVES.contains(&last.to_lowercase().as_str()) {
+            components.pop();
+        } else {
+            break;
+        }
+    }
+    components
+        .last()
+        .map(|s| s.trim_start_matches('.').to_owned())
+        .unwrap_or_else(|| "this app".to_owned())
+}
+
 /// Filtered, sorted view over `findings` plus aggregates derived from it,
 /// so the per-frame UI work is O(visible rows) instead of O(all findings).
 #[derive(Default)]
 pub(crate) struct ViewCache {
-    /// Indices into `findings` passing filters, in current sort order.
-    pub(crate) rows: Vec<usize>,
+    /// Table rows in current sort order: singles and version groups mixed.
+    pub(crate) rows: Vec<RowRef>,
+    /// Every currently-filtered finding index, singles and group members
+    /// alike — what a bulk "select all" must cover, since collapsing a
+    /// group into one `rows` entry must never shrink what bulk selection
+    /// reaches.
+    pub(crate) all_rows: Vec<usize>,
+    pub(crate) version_groups: Vec<VersionGroup>,
     pub(crate) cleanup_totals: CleanupTotals,
     /// Per-category rollup over everything the severity/search filters
     /// admit, IGNORING the category filter — the sidebar must keep showing
@@ -257,6 +404,57 @@ impl CleanBuckets {
 mod tests {
     use super::*;
 
+    #[test]
+    fn friendly_app_name_recognises_every_shipped_group_rule() {
+        assert_eq!(
+            friendly_app_name(
+                "superseded Claude Code build — the current one is kept",
+                Path::new("/home/me/.local/share/claude/versions"),
+            ),
+            "Claude Code"
+        );
+        assert_eq!(
+            friendly_app_name(
+                "superseded Codex CLI build — the current one is kept",
+                Path::new("/home/me/.codex/packages/standalone/releases"),
+            ),
+            "Codex CLI"
+        );
+        assert_eq!(
+            friendly_app_name(
+                "older Node.js install — reinstall with `nvm install <version>`",
+                Path::new("/home/me/.nvm/versions/node"),
+            ),
+            "Node.js"
+        );
+        assert_eq!(
+            friendly_app_name(
+                "superseded Toolbox build — the current one is kept",
+                Path::new("/home/me/.local/share/JetBrains/Toolbox/apps"),
+            ),
+            "JetBrains Toolbox"
+        );
+    }
+
+    /// A future group rule with no entry in `KNOWN` still gets a readable
+    /// name, from its own directory rather than the generic leaf.
+    #[test]
+    fn friendly_app_name_falls_back_to_the_store_directory() {
+        assert_eq!(
+            friendly_app_name(
+                "superseded Widget build",
+                Path::new("/home/me/.widget/versions"),
+            ),
+            "widget"
+        );
+        // A path that is nothing but a generic leaf leaves no name to fall
+        // back to.
+        assert_eq!(
+            friendly_app_name("no match here", Path::new("versions")),
+            "this app"
+        );
+    }
+
     fn disk(mount: &str, total: u64, free: u64) -> StorageVolume {
         StorageVolume {
             source: format!("/dev/{}", mount.trim_matches('/')),
@@ -278,6 +476,7 @@ mod tests {
             note: String::new(),
             advice: None,
             provenance: None,
+            version_group: None,
         }
     }
 

@@ -15,10 +15,13 @@ serde_json = { workspace = true }
 chrono = { workspace = true }
 
 eframe = "0.29"
-egui_extras = { version = "0.29", features = ["all_loaders"] }
+# Only `TableBuilder` is used, so no image/svg loader features: dropping
+# `all_loaders` removes the resvg/usvg/quick-xml/ttf-parser SVG stack
+# (RUSTSEC-2026-0194/0195 and the unmaintained ttf-parser) that this app
+# never exercises — it decodes its PNG assets through `image` directly.
+egui_extras = { version = "0.29" }
 rfd = "0.15"
-# PNG decode for the window icon; `image` is already in the tree via
-# egui_extras's loaders, so this adds no new compilation.
+# PNG decode for the window icon and in-app logo.
 image = { version = "0.25", default-features = false, features = ["png"] }
 
 [dev-dependencies]

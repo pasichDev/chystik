@@ -6,7 +6,7 @@ recovery_note = "the next OptiX workload recompiles kernels"
 cleanup_policy = "auto-cleanable"
 note = "NVIDIA OptiX compilation cache — recreated by the next OptiX run"
 source_url = "https://raytracing-docs.nvidia.com/optix9/api/OptiX_API_Reference.pdf"
-reviewed_at = "2026-08-26"
+reviewed_at = "2026-08-30"
 preconditions = [
   "the path is the exact documented cache root",
   "the path remains inside a Chystik-owned user root",
@@ -25,7 +25,7 @@ recovery_note = "the next OptiX workload recompiles kernels"
 cleanup_policy = "review-required"
 note = "NVIDIA OptiX compilation cache — recreated by the next OptiX run"
 source_url = "https://raytracing-docs.nvidia.com/optix9/api/OptiX_API_Reference.pdf"
-reviewed_at = "2026-08-26"
+reviewed_at = "2026-08-30"
 preconditions = [
   "the environment override names an exact tool-cache root",
   "the resolved path remains inside a Chystik-owned user root",
@@ -44,7 +44,7 @@ recovery_note = "re-download the NVIDIA driver package if setup is needed again"
 cleanup_policy = "review-required"
 note = "NVIDIA extracted driver installer — close setup before moving it to Trash"
 source_url = "https://nvidia.custhelp.com/app/answers/detail/a_id/2985/"
-reviewed_at = "2026-08-26"
+reviewed_at = "2026-08-30"
 preconditions = [
   "the path is under the exact vendor staging root",
   "the documented installer layout markers are present",

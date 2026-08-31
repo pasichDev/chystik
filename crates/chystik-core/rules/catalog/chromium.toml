@@ -1,0 +1,57 @@
+# Chromium-based browsers store regenerable disk caches (Cache, Code Cache,
+# GPUCache) inside the profile directory under the user-data dir. History,
+# cookies and site data are separate files and are never targeted. See:
+# https://chromium.googlesource.com/chromium/src/+/HEAD/docs/user_data_dir.md
+
+[[rule]]
+id = "google.chrome-cache"
+category = "browser-system"
+recovery = "automatic"
+recovery_note = "Chrome refetches cached web resources and recompiles shaders as you browse"
+cleanup_policy = "auto-cleanable"
+note = "Google Chrome HTTP, code and GPU caches (Default profile) — refilled as you browse"
+source_url = "https://chromium.googlesource.com/chromium/src/+/HEAD/docs/user_data_dir.md"
+reviewed_at = "2026-08-30"
+preconditions = [
+  "the path is a Chromium cache subdirectory of the Default profile",
+  "browsing history, cookies and site data live in separate files and are not touched",
+]
+
+[[rule.locator]]
+platform = "windows"
+root = "local-app-data"
+path = "Google/Chrome/User Data/Default/Cache"
+
+[[rule.locator]]
+platform = "windows"
+root = "local-app-data"
+path = "Google/Chrome/User Data/Default/Code Cache"
+
+[[rule.locator]]
+platform = "windows"
+root = "local-app-data"
+path = "Google/Chrome/User Data/Default/GPUCache"
+
+[[rule]]
+id = "perplexity.comet-cache"
+category = "browser-system"
+recovery = "automatic"
+recovery_note = "Comet refetches cached web resources and recompiles shaders as you browse"
+cleanup_policy = "auto-cleanable"
+note = "Perplexity Comet browser HTTP and code caches (Default profile) — refilled as you browse"
+source_url = "https://chromium.googlesource.com/chromium/src/+/HEAD/docs/user_data_dir.md"
+reviewed_at = "2026-08-30"
+preconditions = [
+  "the path is a Chromium cache subdirectory of the Comet Default profile",
+  "browsing history, cookies and site data live in separate files and are not touched",
+]
+
+[[rule.locator]]
+platform = "windows"
+root = "local-app-data"
+path = "Perplexity/Comet/User Data/Default/Cache"
+
+[[rule.locator]]
+platform = "windows"
+root = "local-app-data"
+path = "Perplexity/Comet/User Data/Default/Code Cache"

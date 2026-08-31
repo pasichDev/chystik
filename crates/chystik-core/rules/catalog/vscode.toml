@@ -1,0 +1,38 @@
+# Visual Studio Code (Electron) keeps its regenerable caches under the roaming
+# user-data folder %APPDATA%\Code, while settings, extensions and workspace
+# state live elsewhere. Data location documented at:
+# https://code.visualstudio.com/docs/setup/uninstall
+
+[[rule]]
+id = "microsoft.vscode-cache"
+category = "ide-toolchains"
+recovery = "automatic"
+recovery_note = "VS Code recompiles cached bytecode and refetches cached resources on the next launch"
+cleanup_policy = "auto-cleanable"
+note = "Visual Studio Code compiled-bytecode and web caches — rebuilt on the next launch"
+source_url = "https://code.visualstudio.com/docs/setup/uninstall"
+reviewed_at = "2026-08-30"
+preconditions = [
+  "the path is a VS Code cache subdirectory of the roaming user-data folder",
+  "settings, extensions and workspace state live elsewhere and are not touched",
+]
+
+[[rule.locator]]
+platform = "windows"
+root = "roaming-app-data"
+path = "Code/CachedData"
+
+[[rule.locator]]
+platform = "windows"
+root = "roaming-app-data"
+path = "Code/Cache"
+
+[[rule.locator]]
+platform = "windows"
+root = "roaming-app-data"
+path = "Code/Code Cache"
+
+[[rule.locator]]
+platform = "windows"
+root = "roaming-app-data"
+path = "Code/GPUCache"

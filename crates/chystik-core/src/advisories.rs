@@ -132,6 +132,7 @@ fn probe_one(advisory: &Advisory) -> Option<Finding> {
         note: advisory.note.to_owned(),
         advice: Some(advisory.command.to_owned()),
         provenance: None,
+        version_group: None,
     })
 }
 

@@ -494,3 +494,69 @@ pub(crate) fn draw_settings_mark(painter: &egui::Painter, c: egui::Pos2, color: 
         painter.circle(egui::pos2(c.x + knob_x, c.y + dy), 2.0, COL_SURFACE, stroke);
     }
 }
+
+/// A ring that draws itself in, then a check-mark that draws itself in,
+/// as `t` runs 0.0 (nothing shown yet) to 1.0 (fully drawn). Caller owns
+/// the clock — see `Notice::shown_at` — so the animation plays exactly
+/// once no matter how many frames repaint while it does.
+///
+/// PAINTED for the same reason as the other marks: nothing in IBM Plex
+/// reads as unambiguously "done" the way a drawn check does, and drawing
+/// it also gets the partial-stroke animation for free.
+pub(crate) fn paint_success_check(
+    ui: &mut egui::Ui,
+    size: f32,
+    color: egui::Color32,
+    t: f32,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
+    let c = rect.center();
+    let r = size / 2.0 - 1.2;
+
+    // Ring: eased scale-in over the first 45% of the animation.
+    let ring_t = (t / 0.45).clamp(0.0, 1.0);
+    let ring_r = r * ease_out_back(ring_t);
+    if ring_r > 0.0 {
+        ui.painter()
+            .circle_stroke(c, ring_r, egui::Stroke::new(1.8_f32, color));
+    }
+
+    // Check: two segments, short arm then long arm, drawn as the trailing
+    // 65% of the animation so the tick visibly follows the ring.
+    let check_t = ((t - 0.35) / 0.65).clamp(0.0, 1.0);
+    if check_t > 0.0 {
+        let p0 = egui::pos2(c.x - r * 0.5, c.y + r * 0.05);
+        let p1 = egui::pos2(c.x - r * 0.12, c.y + r * 0.42);
+        let p2 = egui::pos2(c.x + r * 0.55, c.y - r * 0.35);
+        let stroke = egui::Stroke::new(2.0_f32, color);
+        let short_len = (p1 - p0).length();
+        let long_len = (p2 - p1).length();
+        let total = short_len + long_len;
+        let drawn = total * check_t;
+        if drawn <= short_len {
+            let f = if short_len > 0.0 {
+                drawn / short_len
+            } else {
+                1.0
+            };
+            ui.painter().line_segment([p0, p0 + (p1 - p0) * f], stroke);
+        } else {
+            ui.painter().line_segment([p0, p1], stroke);
+            let f = if long_len > 0.0 {
+                (drawn - short_len) / long_len
+            } else {
+                1.0
+            };
+            ui.painter().line_segment([p1, p1 + (p2 - p1) * f], stroke);
+        }
+    }
+    response
+}
+
+/// A small overshoot-then-settle curve, so the ring pops in rather than
+/// just growing linearly.
+fn ease_out_back(t: f32) -> f32 {
+    let c1 = 1.70158_f32;
+    let c3 = c1 + 1.0;
+    1.0 + c3 * (t - 1.0).powi(3) + c1 * (t - 1.0).powi(2)
+}

@@ -44,19 +44,23 @@ mod tests {
 
     #[test]
     fn nested_exclusions_collapse_into_their_parent() {
+        // Use an absolute base valid on the host: a leading `/` is drive-relative
+        // (not absolute) on Windows, so normalize_exclusions would prepend the
+        // current drive and the fixture would no longer be a stable literal.
+        let base = if cfg!(windows) {
+            PathBuf::from(r"C:\home\u")
+        } else {
+            PathBuf::from("/home/u")
+        };
+        let repo = base.join("repo");
+        let other = base.join("other");
         let list = normalise(vec![
-            PathBuf::from("/home/u/repo/app/node_modules"),
-            PathBuf::from("/home/u/repo"),
-            PathBuf::from("/home/u/repo"),
-            PathBuf::from("/home/u/other"),
+            repo.join("app").join("node_modules"),
+            repo.clone(),
+            repo.clone(),
+            other.clone(),
         ]);
-        assert_eq!(
-            list,
-            vec![
-                PathBuf::from("/home/u/other"),
-                PathBuf::from("/home/u/repo")
-            ]
-        );
+        assert_eq!(list, vec![other, repo]);
     }
 
     #[test]

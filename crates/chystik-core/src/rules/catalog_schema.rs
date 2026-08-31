@@ -12,6 +12,7 @@ pub const ENVIRONMENT_OVERRIDES: &[&str] = &[
     "SCCACHE_DIR",
     "VCPKG_DEFAULT_BINARY_CACHE",
     "OPTIX_CACHE_PATH",
+    "PUB_CACHE",
 ];
 
 #[derive(Debug, Clone, Deserialize)]
@@ -200,6 +201,7 @@ fn validate_locator(rule: &RawRule, locator: &RawLocator) -> Result<(), String> 
         "home"
             | "cache"
             | "local-app-data"
+            | "roaming-app-data"
             | "library-caches"
             | "developer"
             | "volume-root"
@@ -300,6 +302,15 @@ mod tests {
                 required_dirs: vec![],
             }],
         }
+    }
+
+    #[test]
+    fn accepts_the_windows_roaming_app_data_root() {
+        let mut valid = rule();
+        valid.locator[0].platform = "windows".into();
+        valid.locator[0].root = "roaming-app-data".into();
+        valid.locator[0].path = Some("discord/Cache".into());
+        assert!(validate_catalog(&[valid]).is_ok());
     }
 
     #[test]
