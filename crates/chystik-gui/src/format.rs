@@ -139,8 +139,6 @@ mod tests {
     use crate::i18n::Lang;
     use std::path::PathBuf;
 
-    const GB: u64 = 1024 * 1024 * 1024;
-
     /// Minimal volume for the capacity helpers.
     fn disk(mount: &str, total: u64, free: u64) -> StorageVolume {
         StorageVolume {

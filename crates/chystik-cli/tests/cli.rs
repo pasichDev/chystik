@@ -240,7 +240,7 @@ fn catalog_finding_exposes_policy_and_evidence_in_json_and_verbose_output() {
         .unwrap()
         .contains("pip.pypa.io"));
     assert!(pip["provenance"]["recovery_cost"].as_str().is_some());
-    assert_eq!(pip["provenance"]["reviewed_at"], "2026-08-26");
+    assert_eq!(pip["provenance"]["reviewed_at"], "2026-08-30");
     assert!(pip["provenance"]["preconditions"]
         .as_array()
         .is_some_and(|preconditions| !preconditions.is_empty()));
@@ -264,7 +264,7 @@ fn catalog_finding_exposes_policy_and_evidence_in_json_and_verbose_output() {
     assert!(stdout.contains("rule: python.pip.cache"));
     assert!(stdout.contains("recovery:"));
     assert!(stdout.contains("source: https://pip.pypa.io/"));
-    assert!(stdout.contains("reviewed: 2026-08-26"));
+    assert!(stdout.contains("reviewed: 2026-08-30"));
     assert!(stdout.contains("requires:"));
 
     let mut preview = chystik();

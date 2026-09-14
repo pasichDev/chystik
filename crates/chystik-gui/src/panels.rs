@@ -893,30 +893,28 @@ impl ChystikApp {
                                             // floating pill that needs no
                                             // hover to be seen.
                                             if just_copied {
-                                                egui::Area::new(egui::Id::new(
-                                                    "advice_copy_toast",
-                                                ))
-                                                .order(egui::Order::Tooltip)
-                                                .fixed_pos(
-                                                    hit_rect.left_top()
-                                                        - egui::vec2(0.0, space(3.0)),
-                                                )
-                                                .show(ui.ctx(), |ui| {
-                                                    egui::Frame::popup(ui.style())
-                                                        .fill(COL_ACCENT)
-                                                        .rounding(egui::Rounding::same(R_SM))
-                                                        .inner_margin(egui::Margin::symmetric(
-                                                            space(1.5),
-                                                            space(0.5),
-                                                        ))
-                                                        .show(ui, |ui| {
-                                                            ui.label(txt(
-                                                                s.advice_copied.as_str(),
-                                                                "micro",
-                                                                COL_RAISED,
-                                                            ));
-                                                        });
-                                                });
+                                                egui::Area::new(egui::Id::new("advice_copy_toast"))
+                                                    .order(egui::Order::Tooltip)
+                                                    .fixed_pos(
+                                                        hit_rect.left_top()
+                                                            - egui::vec2(0.0, space(3.0)),
+                                                    )
+                                                    .show(ui.ctx(), |ui| {
+                                                        egui::Frame::popup(ui.style())
+                                                            .fill(COL_ACCENT)
+                                                            .rounding(egui::Rounding::same(R_SM))
+                                                            .inner_margin(egui::Margin::symmetric(
+                                                                space(1.5),
+                                                                space(0.5),
+                                                            ))
+                                                            .show(ui, |ui| {
+                                                                ui.label(txt(
+                                                                    s.advice_copied.as_str(),
+                                                                    "micro",
+                                                                    COL_RAISED,
+                                                                ));
+                                                            });
+                                                    });
                                             }
                                         }
                                         None => {
