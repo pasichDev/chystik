@@ -6,7 +6,7 @@ recovery_note = "re-download the AMD installer if it is needed for repair"
 cleanup_policy = "review-required"
 note = "AMD extracted installer — confirm no install or repair is in progress"
 source_url = "https://rocm.docs.amd.com/projects/install-on-windows/en/latest/how-to/install.html"
-reviewed_at = "2026-08-26"
+reviewed_at = "2026-08-30"
 preconditions = [
   "the path is under the exact vendor staging root",
   "the documented installer layout markers are present",
@@ -28,7 +28,7 @@ recovery_note = "games rebuild shaders on their next start"
 cleanup_policy = "tool-managed"
 note = "AMD shader cache — reset it through AMD Software: Adrenalin"
 source_url = "https://www.amd.com/en/resources/support-articles/faqs/dh-012.html"
-reviewed_at = "2026-08-26"
+reviewed_at = "2026-08-30"
 preconditions = [
   "Chystik must not move this path to Trash",
   "use the owning operating-system or vendor command instead",

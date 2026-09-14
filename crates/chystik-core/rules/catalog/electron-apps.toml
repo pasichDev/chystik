@@ -1,0 +1,77 @@
+# Electron apps embed Chromium and write its regenerable disk caches (Cache,
+# Code Cache, GPUCache) under the app's user-data directory. Account, message
+# and document data live in separate stores and are never targeted. Chromium's
+# cache subdirectories under userData are documented at:
+# https://www.electronjs.org/docs/latest/api/app
+
+[[rule]]
+id = "discord.cache"
+category = "messengers"
+recovery = "automatic"
+recovery_note = "Discord refetches cached assets and recompiles code caches as you use it"
+cleanup_policy = "auto-cleanable"
+note = "Discord (Electron) HTTP, code and GPU caches — refilled as you use the app"
+source_url = "https://www.electronjs.org/docs/latest/api/app"
+reviewed_at = "2026-08-30"
+preconditions = [
+  "the path is a Chromium cache subdirectory of the Discord user-data folder",
+  "account, message and settings data live in separate stores and are not touched",
+]
+
+[[rule.locator]]
+platform = "windows"
+root = "roaming-app-data"
+path = "discord/Cache"
+
+[[rule.locator]]
+platform = "windows"
+root = "roaming-app-data"
+path = "discord/Code Cache"
+
+[[rule.locator]]
+platform = "windows"
+root = "roaming-app-data"
+path = "discord/GPUCache"
+
+[[rule]]
+id = "notion.cache"
+category = "office-docs"
+recovery = "automatic"
+recovery_note = "Notion refetches cached assets and recompiles code caches as you use it"
+cleanup_policy = "auto-cleanable"
+note = "Notion (Electron) HTTP and code caches — refilled as you use the app"
+source_url = "https://www.electronjs.org/docs/latest/api/app"
+reviewed_at = "2026-08-30"
+preconditions = [
+  "the path is a Chromium cache subdirectory of the Notion user-data folder",
+  "documents and offline data live in separate stores and are not touched",
+]
+
+[[rule.locator]]
+platform = "windows"
+root = "roaming-app-data"
+path = "Notion/Partitions/notion/Cache"
+
+[[rule.locator]]
+platform = "windows"
+root = "roaming-app-data"
+path = "Notion/Partitions/notion/Code Cache"
+
+[[rule]]
+id = "antigravity.cache"
+category = "ide-toolchains"
+recovery = "automatic"
+recovery_note = "Antigravity recompiles cached bytecode on the next launch"
+cleanup_policy = "auto-cleanable"
+note = "Antigravity (Electron IDE) compiled-bytecode cache — rebuilt on the next launch"
+source_url = "https://www.electronjs.org/docs/latest/api/app"
+reviewed_at = "2026-08-30"
+preconditions = [
+  "the path is a Chromium cache subdirectory of the Antigravity user-data folder",
+  "settings, extensions and workspace state live elsewhere and are not touched",
+]
+
+[[rule.locator]]
+platform = "windows"
+root = "roaming-app-data"
+path = "Antigravity/CachedData"

@@ -133,6 +133,7 @@ mod tests {
             note: String::new(),
             advice: None,
             provenance: None,
+            version_group: None,
         }
     }
 

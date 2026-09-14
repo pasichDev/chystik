@@ -1,0 +1,41 @@
+# Game-launcher web-view caches. These hold the store/library web UI cache,
+# rebuilt when the launcher next loads those pages. Installed games and saves
+# live elsewhere and are never targeted.
+
+[[rule]]
+id = "epic.webcache"
+category = "game-launchers"
+recovery = "rebuild-redownload"
+recovery_note = "the launcher rebuilds its web-view cache the next time it loads the store"
+cleanup_policy = "review-required"
+note = "Epic Games Launcher web-view cache — rebuilt when the store next loads"
+source_url = "https://www.epicgames.com/help/c-202300000001639/c-202300000001735/how-do-i-clear-the-launcher-cache-on-pc-a202300000013316"
+reviewed_at = "2026-08-30"
+preconditions = [
+  "the path is the documented launcher web cache",
+  "installed games and saves live elsewhere and are not affected",
+]
+
+[[rule.locator]]
+platform = "windows"
+root = "local-app-data"
+path = "EpicGamesLauncher/Saved/webcache"
+
+[[rule]]
+id = "valve.steam-htmlcache"
+category = "game-launchers"
+recovery = "rebuild-redownload"
+recovery_note = "Steam rebuilds its in-client web cache the next time you open the store or library pages"
+cleanup_policy = "review-required"
+note = "Steam in-client web (CEF) cache — rebuilt when store or library pages next load"
+source_url = "https://help.steampowered.com/en/faqs/view/29A6-F529-F956-6292"
+reviewed_at = "2026-08-30"
+preconditions = [
+  "the path is the Steam client web cache directory",
+  "installed games and saves live elsewhere and are not affected",
+]
+
+[[rule.locator]]
+platform = "windows"
+root = "local-app-data"
+path = "Steam/htmlcache"

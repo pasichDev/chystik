@@ -1,0 +1,48 @@
+# JetBrains IDE caches on Windows. The IDE keeps its regenerable "system"
+# directory (caches, indexes, logs) under %LOCALAPPDATA%, while settings and
+# plugins live in the separate roaming config directory that Chystik never
+# touches. See:
+# https://www.jetbrains.com/help/idea/directories-used-by-the-ide-to-store-settings-caches-plugins-and-logs.html
+
+[[rule]]
+id = "jetbrains.ide-system-dir"
+category = "ide-toolchains"
+recovery = "rebuild-redownload"
+recovery_note = "the IDE rebuilds its caches and reindexes projects on the next launch; local history and per-project workspace state in this directory are lost"
+cleanup_policy = "review-required"
+note = "JetBrains IDE system directory for one product version — caches and indexes rebuild on the next launch, but local history and per-project workspace state here are lost"
+source_url = "https://www.jetbrains.com/help/idea/directories-used-by-the-ide-to-store-settings-caches-plugins-and-logs.html"
+reviewed_at = "2026-08-30"
+preconditions = [
+  "the directory is a JetBrains product-version system directory in the local vendor folder",
+  "settings and plugins live in the separate roaming config directory and are never touched",
+]
+
+# Match each product-version directory (IntelliJIdea2024.1, WebStorm2025.3, …)
+# by its regenerable caches folder. The Toolbox app's own folder uses a
+# singular "cache" directory, so this marker leaves it — and Fleet — alone.
+[[rule.locator]]
+platform = "windows"
+root = "local-app-data"
+path = "JetBrains"
+matcher = "direct-child-with-markers"
+required_dirs = ["caches"]
+
+[[rule]]
+id = "jetbrains.toolbox-cache"
+category = "ide-toolchains"
+recovery = "rebuild-redownload"
+recovery_note = "Toolbox re-downloads installers and packages into the cache the next time you install or update a tool"
+cleanup_policy = "review-required"
+note = "JetBrains Toolbox download cache — re-downloaded on the next install or update"
+source_url = "https://www.jetbrains.com/help/toolbox-app/frequently-asked-questions.html"
+reviewed_at = "2026-08-30"
+preconditions = [
+  "the path is the exact Toolbox download cache root",
+  "installed IDEs live elsewhere and are not affected",
+]
+
+[[rule.locator]]
+platform = "windows"
+root = "local-app-data"
+path = "JetBrains/Toolbox/cache"

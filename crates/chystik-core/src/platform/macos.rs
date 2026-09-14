@@ -42,6 +42,7 @@ impl Adapter for MacOS {
             developer_dir: Some(home_dir.join("Library/Developer")),
             home_dir,
             local_app_data_dir: None,
+            roaming_app_data_dir: None,
             volume_root: None,
         }
     }

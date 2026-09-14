@@ -40,6 +40,7 @@ fn finding(path: impl AsRef<Path>, severity: Severity, size_bytes: u64) -> Findi
         note: "fixture".into(),
         advice: None,
         provenance: None,
+        version_group: None,
     }
 }
 
@@ -54,7 +55,11 @@ fn normalizes_roots_to_absolute_non_overlapping_directories() {
 
     let roots = normalize_roots(&[nested, root.clone(), sibling.clone(), root]).unwrap();
 
-    assert_eq!(roots, vec![sandbox.path().join("root"), sibling]);
+    // normalize_roots canonicalizes; on Windows that yields a verbatim `\\?\`
+    // path, so compare against the same canonical form on every platform.
+    let expected_root = std::fs::canonicalize(sandbox.path().join("root")).unwrap();
+    let expected_sibling = std::fs::canonicalize(&sibling).unwrap();
+    assert_eq!(roots, vec![expected_root, expected_sibling]);
     assert!(roots.iter().all(|path| path.is_absolute()));
 }
 
@@ -131,6 +136,16 @@ fn safe_cleanup_plan_never_selects_excluded_advisory_risky_or_review_findings() 
     for path in [&safe, &excluded, &risky, &advisory, &review] {
         std::fs::create_dir_all(path).unwrap();
     }
+
+    // Findings and roots carry the canonical form the scanner produces (a
+    // verbatim `\\?\` path on Windows); the exclusion filter canonicalizes too.
+    // Canonicalize the fixtures so the whole flow matches production semantics.
+    let root = std::fs::canonicalize(&root).unwrap();
+    let safe = std::fs::canonicalize(&safe).unwrap();
+    let excluded = std::fs::canonicalize(&excluded).unwrap();
+    let risky = std::fs::canonicalize(&risky).unwrap();
+    let advisory = std::fs::canonicalize(&advisory).unwrap();
+    let review = std::fs::canonicalize(&review).unwrap();
 
     let mut advisory_finding = finding(&advisory, Severity::Safe, 400);
     advisory_finding.advice = Some("run package-manager cleanup".into());

@@ -116,6 +116,8 @@ impl Adapter for Windows {
         let home_dir = super::privacy_home_dir_or_current();
         let local_app_data_dir =
             env_absolute("LOCALAPPDATA").or_else(|| Some(home_dir.join("AppData/Local")));
+        let roaming_app_data_dir =
+            env_absolute("APPDATA").or_else(|| Some(home_dir.join("AppData/Roaming")));
         let volume_root = system_drive_root();
         super::RuleRoots {
             cache_dir: local_app_data_dir
@@ -123,6 +125,7 @@ impl Adapter for Windows {
                 .unwrap_or_else(|| home_dir.join("AppData/Local")),
             home_dir,
             local_app_data_dir,
+            roaming_app_data_dir,
             library_caches_dir: None,
             developer_dir: None,
             volume_root: Some(volume_root),

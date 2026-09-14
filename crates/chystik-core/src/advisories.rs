@@ -47,7 +47,7 @@ const ADVISORIES: &[Advisory] = &[
         category: Category::Installers,
         severity: Severity::Moderate,
         note: "Flatpak object store, including runtimes nothing uses any more",
-        command: "flatpak uninstall --unused && flatpak repair",
+        command: "sudo flatpak uninstall --unused --system && sudo flatpak repair --system",
         min_bytes: 512 * MIB,
     },
     Advisory {
@@ -132,6 +132,7 @@ fn probe_one(advisory: &Advisory) -> Option<Finding> {
         note: advisory.note.to_owned(),
         advice: Some(advisory.command.to_owned()),
         provenance: None,
+        version_group: None,
     })
 }
 

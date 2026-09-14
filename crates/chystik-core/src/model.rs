@@ -305,6 +305,17 @@ pub struct Finding {
     /// automation keeps receiving the same machine document it already knows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provenance: Option<RuleProvenance>,
+    /// The versioned store this finding lives in — e.g. every superseded
+    /// Claude Code build shares `~/.local/share/claude/versions` here —
+    /// when it came from a versioned-store group rule. `None` for every
+    /// other finding, so the machine JSON gains nothing for the
+    /// overwhelming majority of rows.
+    ///
+    /// The UI groups findings that share this path into one row: "N older
+    /// versions found, the newest is kept" instead of N look-alike entries
+    /// that differ only by a version number in the path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version_group: Option<PathBuf>,
 }
 
 impl Finding {
@@ -387,6 +398,7 @@ mod tests {
             note: "fixture".into(),
             advice: advice.map(str::to_owned),
             provenance,
+            version_group: None,
         }
     }
 

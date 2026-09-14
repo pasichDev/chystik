@@ -16,9 +16,31 @@ pub(crate) mod media;
 pub(crate) mod office_docs;
 pub(crate) mod system_junk;
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use crate::model::{Category, Severity};
+
+/// Strip the Windows verbatim prefix (`\\?\`, or `\\?\UNC\` for UNC paths) so
+/// path matching sees the same spelling the rule tables use.
+///
+/// The scanner canonicalizes its roots for guard safety, which on Windows
+/// yields verbatim `\\?\C:\...` paths for every walked entry. The rule tables
+/// — catalog targets, `$HOME`-relative rules, group rules — are all built from
+/// plain `C:\...` roots, so a `strip_prefix(home)` or path equality against a
+/// verbatim path silently failed and left the whole home-anchored catalog dead
+/// on Windows. Normalizing once at the classifier boundary fixes every
+/// consumer without disturbing the real path reported for the finding.
+pub(crate) fn strip_verbatim(dir: &Path) -> Cow<'_, Path> {
+    let text = dir.as_os_str().to_string_lossy();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return Cow::Owned(PathBuf::from(format!(r"\\{rest}")));
+    }
+    if let Some(rest) = text.strip_prefix(r"\\?\") {
+        return Cow::Owned(PathBuf::from(rest));
+    }
+    Cow::Borrowed(dir)
+}
 
 /// A single rule hit.
 #[derive(Debug, Clone)]
@@ -54,6 +76,8 @@ impl RuleEngine {
     }
 
     pub(crate) fn classify_with_metadata(&self, dir: &Path) -> Option<ClassifiedRule> {
+        let dir = strip_verbatim(dir);
+        let dir = dir.as_ref();
         if let Some((matched, catalog)) = self.catalog.classify_with_metadata(dir) {
             return Some(ClassifiedRule {
                 matched,
@@ -123,6 +147,8 @@ pub(crate) const GROUP_RULES: &[GroupRule] = &[
 
 /// The group rule covering `dir`, if any.
 pub(crate) fn classify_group(dir: &Path) -> Option<&'static GroupRule> {
+    let dir = strip_verbatim(dir);
+    let dir = dir.as_ref();
     let home = home_root()?;
     let rel = if let Ok(rel) = dir.strip_prefix(&home) {
         rel.to_string_lossy().replace('\\', "/")
@@ -316,6 +342,46 @@ mod tests {
             .expect("registry match")
             .matched;
         assert_eq!(m.category, Category::BuildArtifacts);
+    }
+
+    /// Regression: the scanner canonicalizes its roots, so on Windows every
+    /// walked path arrives verbatim-prefixed (`\\?\C:\...`). Rule tables use
+    /// plain roots, so without stripping the prefix the whole home-anchored
+    /// catalog silently matched nothing. Prefixing here reproduces that shape
+    /// on any platform and proves the classifier still matches.
+    #[test]
+    fn verbatim_prefixed_paths_still_classify() {
+        let root = tempdir().unwrap();
+        let proj = root.path().join("app");
+        std::fs::create_dir_all(proj.join("node_modules")).unwrap();
+        std::fs::write(proj.join("package.json"), "{}").unwrap();
+        std::fs::write(proj.join("package-lock.json"), "{}").unwrap();
+
+        let real = proj.join("node_modules");
+        let verbatim = PathBuf::from(format!(r"\\?\{}", real.display()));
+        assert!(
+            RuleEngine::current()
+                .classify_with_metadata(&verbatim)
+                .is_some(),
+            "a verbatim-prefixed path must classify the same as its plain form"
+        );
+    }
+
+    #[test]
+    fn strip_verbatim_removes_windows_prefixes() {
+        assert_eq!(
+            strip_verbatim(Path::new(r"\\?\C:\Users\x\.cache")).as_ref(),
+            Path::new(r"C:\Users\x\.cache")
+        );
+        assert_eq!(
+            strip_verbatim(Path::new(r"\\?\UNC\server\share\dir")).as_ref(),
+            Path::new(r"\\server\share\dir")
+        );
+        // A plain path is returned untouched (and borrowed).
+        assert!(matches!(
+            strip_verbatim(Path::new("/home/x/.cache")),
+            Cow::Borrowed(_)
+        ));
     }
 
     #[cfg(target_os = "linux")]

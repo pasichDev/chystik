@@ -6,7 +6,7 @@ recovery_note = "games and graphics applications rebuild shaders on first run"
 cleanup_policy = "advisory-only"
 note = "Windows DirectX shader cache — clear it through Temporary files, not raw deletion"
 source_url = "https://support.microsoft.com/en-us/windows/free-up-drive-space-in-windows-85529ccb-c365-4c84-8d63-4d518db795dc"
-reviewed_at = "2026-08-26"
+reviewed_at = "2026-08-30"
 preconditions = [
   "Chystik must not move this path to Trash",
   "use the owning operating-system or vendor command instead",
@@ -17,3 +17,42 @@ advice = "Open Settings → System → Storage → Temporary files → DirectX S
 platform = "windows"
 root = "local-app-data"
 path = "D3DSCache"
+
+[[rule]]
+id = "windows.crash-dumps"
+category = "system-junk"
+recovery = "automatic"
+recovery_note = "Windows Error Reporting writes a new dump only when an application next crashes"
+cleanup_policy = "review-required"
+note = "Windows Error Reporting user-mode crash dumps — diagnostic files re-created only on the next crash"
+source_url = "https://learn.microsoft.com/en-us/windows/win32/wer/collecting-user-mode-dumps"
+reviewed_at = "2026-08-30"
+preconditions = [
+  "the path is the documented WER LocalDumps folder",
+  "the dumps are diagnostic output, not application data",
+]
+
+[[rule.locator]]
+platform = "windows"
+root = "local-app-data"
+path = "CrashDumps"
+
+[[rule]]
+id = "windows.temp"
+category = "system-junk"
+recovery = "automatic"
+recovery_note = "applications recreate the temporary files they still need on demand"
+cleanup_policy = "advisory-only"
+note = "Windows per-user temp directory — clear it through Storage Sense, not raw deletion, because running apps may hold open files here"
+source_url = "https://support.microsoft.com/en-us/windows/free-up-drive-space-in-windows-85529ccb-c365-4c84-8d63-4d518db795dc"
+reviewed_at = "2026-08-30"
+preconditions = [
+  "Chystik must not move this path to Trash",
+  "running applications may hold open handles in this directory",
+]
+advice = "Open Settings → System → Storage → Temporary files, or enable Storage Sense"
+
+[[rule.locator]]
+platform = "windows"
+root = "local-app-data"
+path = "Temp"

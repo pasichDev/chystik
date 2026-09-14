@@ -340,6 +340,7 @@ fn scan_root(
                         note: rule.note.to_owned(),
                         advice: None,
                         provenance: None,
+                        version_group: Some(parent.to_path_buf()),
                     };
                     walker_emit(ScanStreamEvent::FindingFound(Box::new(finding)));
                 }
@@ -402,6 +403,7 @@ fn scan_root(
                             .as_ref()
                             .and_then(|metadata| metadata.advice.clone()),
                         provenance: catalog.map(|metadata| metadata.provenance),
+                        version_group: None,
                     };
                     walker_emit(ScanStreamEvent::FindingFound(Box::new(finding)));
                 }

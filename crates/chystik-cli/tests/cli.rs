@@ -64,7 +64,13 @@ fn scan_json_writes_a_versioned_document_and_no_diagnostics_on_success() {
         "generated_at must be an RFC 3339 UTC timestamp: {document}"
     );
     assert_eq!(document["findings"], serde_json::json!([]));
-    assert!(document["roots"][0].as_str().unwrap().starts_with('/'));
+    // Roots are absolute; a leading `/` is Unix-only, so assert absoluteness
+    // portably rather than by prefix (Windows roots look like `C:\…`).
+    let root0 = document["roots"][0].as_str().unwrap();
+    assert!(
+        std::path::Path::new(root0).is_absolute(),
+        "scan roots must be absolute: {root0}"
+    );
 }
 
 #[test]
@@ -234,7 +240,7 @@ fn catalog_finding_exposes_policy_and_evidence_in_json_and_verbose_output() {
         .unwrap()
         .contains("pip.pypa.io"));
     assert!(pip["provenance"]["recovery_cost"].as_str().is_some());
-    assert_eq!(pip["provenance"]["reviewed_at"], "2026-08-26");
+    assert_eq!(pip["provenance"]["reviewed_at"], "2026-08-30");
     assert!(pip["provenance"]["preconditions"]
         .as_array()
         .is_some_and(|preconditions| !preconditions.is_empty()));
@@ -258,7 +264,7 @@ fn catalog_finding_exposes_policy_and_evidence_in_json_and_verbose_output() {
     assert!(stdout.contains("rule: python.pip.cache"));
     assert!(stdout.contains("recovery:"));
     assert!(stdout.contains("source: https://pip.pypa.io/"));
-    assert!(stdout.contains("reviewed: 2026-08-26"));
+    assert!(stdout.contains("reviewed: 2026-08-30"));
     assert!(stdout.contains("requires:"));
 
     let mut preview = chystik();

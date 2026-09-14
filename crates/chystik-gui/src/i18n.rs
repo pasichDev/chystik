@@ -209,6 +209,12 @@ pub struct Strings {
     pub col_age: String,
     pub sort_hint: String,
     pub risky_locked_hint: String,
+    /// Tail label for a collapsed version-group row: "{app} — {n} older
+    /// versions · {size}".
+    pub version_group_row: String,
+    /// First line of a version-group row's tooltip, naming the app that has
+    /// a newer build installed.
+    pub version_group_tooltip_lead: String,
     pub empty_title: String,
     pub empty_body: String,
     pub empty_filtered_title: String,
@@ -221,14 +227,14 @@ pub struct Strings {
     pub totals_review_required: String,
     pub totals_manual_valuable: String,
     pub selected_word: String,
+    pub select_all: String,
+    pub select_all_hint: String,
     pub clear: String,
     pub clear_hint: String,
     pub move_to_trash: String,
     pub move_to_trash_idle: String,
     pub move_to_trash_hint: String,
     pub cleanup_unavailable: String,
-    pub disks: String,
-    pub disks_hint: String,
     // confirm modal
     pub confirm_title: String,
     pub confirm_sub: String,
@@ -316,8 +322,13 @@ pub struct Strings {
     pub privacy_confirm_trash: String,
     pub privacy_confirm_erase: String,
     pub privacy_confirm_risky: String,
+    // progress
+    pub trash_progress_title: String,
+    pub trash_progress_count: String,
     // results
+    pub trash_failed_title: String,
     pub trash_done_title: String,
+    pub trash_done_recovery: String,
     pub trash_moved: String,
     pub trash_skipped: String,
     pub export_done: String,

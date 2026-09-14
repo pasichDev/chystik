@@ -39,6 +39,7 @@ impl Adapter for Unsupported {
             cache_dir: home_dir.join(".cache"),
             home_dir,
             local_app_data_dir: None,
+            roaming_app_data_dir: None,
             library_caches_dir: None,
             developer_dir: None,
             volume_root: None,

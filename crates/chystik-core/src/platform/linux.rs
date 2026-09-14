@@ -42,6 +42,7 @@ impl Adapter for Linux {
             home_dir,
             cache_dir,
             local_app_data_dir: None,
+            roaming_app_data_dir: None,
             library_caches_dir: None,
             developer_dir: None,
             volume_root: None,

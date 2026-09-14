@@ -1,0 +1,36 @@
+# Hugging Face Hub cache. Models, datasets, spaces and the Xet chunk store are
+# re-downloaded on demand; the whole tree is documented as re-downloadable cache
+# (it even ships a CACHEDIR.TAG marking it as backup-excludable). Default
+# location and behaviour documented at:
+# https://huggingface.co/docs/huggingface_hub/en/guides/manage-cache
+
+[[rule]]
+id = "huggingface.hub-cache"
+category = "ai-models"
+recovery = "rebuild-redownload"
+recovery_note = "the Hugging Face Hub re-downloads models, datasets and chunks on the next load; large models can be many gigabytes to refetch"
+cleanup_policy = "review-required"
+note = "Hugging Face Hub cache — re-downloaded on the next model or dataset load"
+source_url = "https://huggingface.co/docs/huggingface_hub/en/guides/manage-cache"
+reviewed_at = "2026-08-30"
+preconditions = [
+  "the path is the documented ~/.cache/huggingface cache root",
+  "the path stays inside a Chystik-owned user root",
+]
+
+# Default on every platform is ~/.cache/huggingface (HF_HOME/HF_HUB_CACHE can
+# override it, but only the documented default is claimed here).
+[[rule.locator]]
+platform = "windows"
+root = "home"
+path = ".cache/huggingface"
+
+[[rule.locator]]
+platform = "linux"
+root = "home"
+path = ".cache/huggingface"
+
+[[rule.locator]]
+platform = "macos"
+root = "home"
+path = ".cache/huggingface"
