@@ -4,6 +4,42 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-09-14
+
+### Added
+
+- Expand the app-cache catalog with 14 new rules covering JetBrains IDEs and
+  Toolbox, Android Studio, Dart/pub, VS Code, Chrome/Comet, Discord, Notion,
+  Antigravity, Epic, and Steam, plus a `%APPDATA%` roaming root locator on
+  Windows.
+- A visible copy-confirmation pill next to an advisory command, so copying it
+  is confirmed even after the pointer leaves the row.
+
+### Fixed
+
+- Windows: the cleanup guard refused every item because findings carried the
+  canonical `\\?\` scan path while confirmation matched against the raw scan
+  targets; matching now anchors on the canonical scan roots.
+- Windows: the verbatim `\\?\` prefix no longer leaks into displayed paths,
+  while internal paths stay verbatim so long `node_modules` trees keep
+  working through the walk and cleanup.
+- The Flatpak advisory command now runs with `sudo` and `--system`, matching
+  the root-owned `/var/lib/flatpak/repo` it targets, instead of silently
+  failing against a nonexistent per-user repo.
+
+### Changed
+
+- Move cleanup to a background thread so the window keeps painting during
+  large deletions, with a live progress modal (count, size, current item).
+- Collapse superseded build/version directories of the same app into one
+  grouped row.
+- "Select all" in a category can now include review-required items
+  (previously blocked outright); the confirmation dialog and native-Trash
+  destination still gate every deletion.
+- Hide zero-value recovery segments from the sidebar and footer totals, and
+  left-align severity filters in a vertical column that no longer stretches
+  under longer translations.
+
 ## [0.2.4] - 2026-08-27
 
 ### Added
