@@ -865,15 +865,17 @@ impl ChystikApp {
                                                 .truncate()
                                                 .sense(egui::Sense::click()),
                                             );
-                                            let copy_hint = if advice_copy_feedback_is_active(
+                                            let just_copied = advice_copy_feedback_is_active(
                                                 copied_advice,
                                                 members[0],
                                                 now,
-                                            ) {
+                                            );
+                                            let copy_hint = if just_copied {
                                                 s.advice_copied.as_str()
                                             } else {
                                                 s.advice_copy.as_str()
                                             };
+                                            let hit_rect = hit.rect;
                                             if hit
                                                 .on_hover_cursor(egui::CursorIcon::PointingHand)
                                                 .on_hover_text(copy_hint)
@@ -883,6 +885,38 @@ impl ChystikApp {
                                                     o.copied_text = command.to_owned()
                                                 });
                                                 copied_advice_request = Some(members[0]);
+                                            }
+                                            // The hover tooltip above is
+                                            // invisible once the pointer
+                                            // leaves after the click, which is
+                                            // the common case — so also show a
+                                            // floating pill that needs no
+                                            // hover to be seen.
+                                            if just_copied {
+                                                egui::Area::new(egui::Id::new(
+                                                    "advice_copy_toast",
+                                                ))
+                                                .order(egui::Order::Tooltip)
+                                                .fixed_pos(
+                                                    hit_rect.left_top()
+                                                        - egui::vec2(0.0, space(3.0)),
+                                                )
+                                                .show(ui.ctx(), |ui| {
+                                                    egui::Frame::popup(ui.style())
+                                                        .fill(COL_ACCENT)
+                                                        .rounding(egui::Rounding::same(R_SM))
+                                                        .inner_margin(egui::Margin::symmetric(
+                                                            space(1.5),
+                                                            space(0.5),
+                                                        ))
+                                                        .show(ui, |ui| {
+                                                            ui.label(txt(
+                                                                s.advice_copied.as_str(),
+                                                                "micro",
+                                                                COL_RAISED,
+                                                            ));
+                                                        });
+                                                });
                                             }
                                         }
                                         None => {
